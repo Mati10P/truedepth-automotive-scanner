@@ -1,0 +1,27 @@
+# Local environments and generated artifacts
+.venv/
+__pycache__/
+*.py[cod]
+node_modules/
+dist/
+build/
+.DS_Store
+.local/
+
+# Device recordings, signing material and local configuration
+captures/
+.env
+.env.*
+!.env.example
+*.p12
+*.mobileprovision
+*.ipa
+
+# Local reference evidence; preserve on disk, exclude from publication
+docs/references/*.png
+docs/research/exstar-ui-lab/*.json
+
+# Proprietary executables must stay outside the source repository
+*.exe
+*.dll
+*.pdb
