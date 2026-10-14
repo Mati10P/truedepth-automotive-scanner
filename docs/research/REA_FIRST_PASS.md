@@ -205,7 +205,7 @@ La siguiente consulta concreta es obtener referencias a `trackRet` y luego ident
 ) > .local/rea-evidence/track-ret-xrefs.json
 ```
 
-Este comando queda documentado como **siguiente consulta, todavía no ejecutada**. Para varias consultas encadenadas conviene mantener una sesión del proveedor abierta, evitando reimportar y analizar toda la DLL por cada invocación CLI.
+Al cerrar este primer pase, esa consulta quedaba pendiente. Se ejecutó después mediante una sesión persistente: los resultados y las descompilaciones encadenadas están en [Seguimiento y pausa](EXSTAR_TRACKING_STATES.md). Para varias consultas encadenadas conviene mantener una sesión del proveedor abierta, evitando reimportar y analizar toda la DLL por cada invocación CLI.
 
 ## Paso 7. Validaciones y cierre del primer pase
 

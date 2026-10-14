@@ -12,6 +12,7 @@ Inicio de implementación: documentación, inventario reproducible y primer aná
 - [Viabilidad y flujo](docs/FEASIBILITY_AND_WORKFLOW.md)
 - [Evaluación de MeshLab](docs/research/MESHLAB_EVALUATION.md)
 - [Primera investigación con REA: pasos y evidencia](docs/research/REA_FIRST_PASS.md)
+- [Seguimiento y pausa: funciones, condiciones y estados de EXStar](docs/research/EXSTAR_TRACKING_STATES.md)
 
 ## Inventario de EXStar
 
