@@ -1,4 +1,4 @@
-"""Read-only EXStar inventory. Export hashes and topic names, never config values."""
+"""Read-only EXStar inventory: hashes, topics and controller/library mappings."""
 
 import argparse
 import hashlib
@@ -34,8 +34,14 @@ def inventory(source):
                 "publishers": [p.findtext("name") for p in topic.findall("./publishers/publisher")],
                 "subscribers": [p.findtext("name") for p in topic.findall("./subscribers/subscriber")],
             })
-        configurations.append({"name": name, "sha256": sha256(path), "topics": topics})
-    return {"schema_version": 1, "scope": "root EXE/DLL files and explicit topic-name allowlist",
+        # Explicit allowlist: never serialize whole elements or other settings.
+        controllers = [
+            {"name": controller.findtext("name"), "library": controller.findtext("libpath")}
+            for controller in root.findall(".//controllerobject")
+        ]
+        configurations.append({"name": name, "sha256": sha256(path),
+                               "topics": topics, "controllers": controllers})
+    return {"schema_version": 2, "scope": "root EXE/DLL files and explicit topic/controller allowlists",
             "binaries": binaries, "configurations": configurations}
 
 

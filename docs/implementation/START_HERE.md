@@ -11,7 +11,7 @@ Resultado buscado: una matriz de pantallas, acciones y estados, vinculada a evid
 3. Preparar REA y dirigir el análisis a preguntas concretas: pausa/reanudación, pérdida de tracking, generación de nube, organización de proyectos, alineación y trabajos de malla. Los nombres de DLL y temas son pistas, no prueba de algoritmos internos.
 4. Documentar hallazgos y decisiones en archivos versionables; revisar el plan ante evidencia nueva.
 
-La inspección inicial del arranque se realizó con análisis estático y observación de la UI. No se ha ejecutado todavía una sesión con REA; no hay herramienta REA/Ghidra expuesta en esta sesión.
+La inspección inicial del arranque se realizó con análisis estático y observación de la UI. El 2026-10-14 comenzó el análisis con REA 6.4.0 y Ghidra 12.1.4 mediante la CLI oficial, sin requerir registro MCP. Se confirmó por descompilación la ruta del aviso de NVIDIA y el comando de salida. Los pasos, evidencias, límites y siguientes preguntas están en [Primera investigación con REA](../research/REA_FIRST_PASS.md).
 
 ## Base del repositorio
 
