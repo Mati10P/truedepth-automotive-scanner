@@ -146,3 +146,5 @@ La primera búsqueda, incluyendo preparación de Ghidra, duró 193697,70 ms, apr
 El siguiente objetivo acotado es **`Sn3DRealtimeScan.dll`**, empezando por `track_pre_frame`, `fusion_and_track_with_speed_limit_has_feature_align_logic` y las variantes de tracking llamadas aquí. Las preguntas son: qué mapa o referencias utilizan, cuándo intentan una búsqueda más amplia, qué condiciones aceptan la pose y en qué puntos modifican la selección para integración.
 
 Quedan además pendientes el origen del flag de comprobación previa, el recorrido completo pausa/reanudación, la interpretación de `0x2a30000b` del informe anterior y la confirmación dinámica del modo EINSTAR. Ninguno se considera resuelto por la mera presencia de símbolos.
+
+Continuación: [Motor de recuperación](EXSTAR_RECOVERY_ENGINE.md) sigue una de estas rutas dentro de `Sn3DRealtimeScan.dll`. Identifica las condiciones de activación del fallback, la validación de candidatos y escrituras de `isNeed` en el motor geométrico. Las afirmaciones de pendiente de este informe describen el estado al cierre de la cuarta tanda.
