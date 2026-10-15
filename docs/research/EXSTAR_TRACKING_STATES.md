@@ -185,6 +185,8 @@ Una captura de prueba debe registrar timestamps, transición de estado, motivo d
 
 ## Próximas preguntas acotadas
 
+Actualización del 2026-10-15: [Escaneo de objetos y selección de frames](EXSTAR_OBJECT_SCAN.md) identifica un productor inicial de `isNeed` en `scan_Object` y su comparación de poses. Falta seguir posibles modificaciones del booleano compartido en el receptor. Las preguntas siguientes se conservan como registro del cierre de esta segunda tanda.
+
 1. Seguir el productor de `FDO_CUR_FRAME_VALID` y del indicador `isNeed`, separando adquisición, pose y criterio de integración.
 2. Examinar `scan_Object` (`0x180053e50`) y el adaptador de algoritmos para localizar el cálculo de pose y la gestión del mapa de referencia.
 3. Identificar los códigos de resultado, en particular `0x2a30000b`, a partir de sus productores y usos; no asignarles significados por intuición.
