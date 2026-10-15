@@ -34,6 +34,7 @@ stderrLog.on('error', error => console.error(`REA log error: ${error.message}`))
 const allowed = new Set([
   'open_binary', 'close_binary', 'xrefs', 'resolve_containing_procedure',
   'procedure_info', 'procedure_references', 'procedure_pseudo_code',
+  'search_strings',
 ]);
 let lines;
 try {

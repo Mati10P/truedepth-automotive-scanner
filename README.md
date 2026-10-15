@@ -14,6 +14,7 @@ Inicio de implementación: documentación, inventario reproducible y primer aná
 - [Primera investigación con REA: pasos y evidencia](docs/research/REA_FIRST_PASS.md)
 - [Seguimiento y pausa: funciones, condiciones y estados de EXStar](docs/research/EXSTAR_TRACKING_STATES.md)
 - [Escaneo de objetos: solicitudes, poses y selección de frames](docs/research/EXSTAR_OBJECT_SCAN.md)
+- [Adaptador de algoritmos: rutas de tracking, resultados y fallos](docs/research/EXSTAR_ALGORITHM_DISPATCH.md)
 
 ## Inventario de EXStar
 

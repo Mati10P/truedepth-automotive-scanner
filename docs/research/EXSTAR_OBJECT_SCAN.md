@@ -102,6 +102,8 @@ Tras la interrupción del turno, la sesión de terminal ya no estaba disponible.
 
 ## Preguntas que siguen abiertas
 
+Actualización: [Del comando de escaneo al motor de tracking](EXSTAR_ALGORITHM_DISPATCH.md) sigue los receptores en `Sn3DAlgorithmWrapper.dll` y confirma una escritura posterior a la llamada del motor sobre `isNeed` en la ruta de textura. El algoritmo interno permanece pendiente; las preguntas siguientes conservan el estado al cerrar esta tercera tanda.
+
 1. Seguir los receptores de `fusion_and_track` y `fusion_without_track` en el adaptador de algoritmos, incluyendo posibles escrituras al booleano compartido.
 2. Identificar la inicialización de los umbrales y la actualización de la pose almacenada en `+0x548`.
 3. Localizar el productor de `FDO_CUR_FRAME_VALID`, que todavía no puede equipararse a tracking válido.
