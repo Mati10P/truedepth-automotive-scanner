@@ -8,7 +8,9 @@ REA/Ghidra e investigación adicional de ICP quedan en pausa. No son dependencia
 
 Implementados localmente: fuente Swift de una app de captura, proyecto declarativo XcodeGen, workflow manual para producir una IPA sin firma, receptor Python y visor HTML local. Se verificaron seis pruebas del receptor (fragmentación, persistencia exacta, corrupción, truncamiento, límites y TCP local). La demostración sintética pasa por el mismo decodificador y checksum.
 
-**Pendiente:** compilar con Xcode, instalar en el iPhone y recibir datos reales. No se dispone de Xcode en este Windows. El workflow no se ha ejecutado ni se ha generado una IPA. Ninguna prueba sintética confirma la compatibilidad física del teléfono ni de su firma. Este entregable es el primer tramo de fase 0, no su aceptación completa.
+**Compilación verificada:** el [run 38853784481](https://github.com/Mati10P/truedepth-automotive-scanner/actions/runs/38853784481) del commit `72b6362` terminó correctamente el 2026-10-16 (32 segundos totales). Se descargó y verificó el artefacto; su ZIP coincide con SHA-256 `c7fe528cbc4baa838be226bcd23d9f187ddc87a32ea60cd27b41530f977d0e3c`. La IPA está en `dist/TrueDepthProbe-unsigned.ipa`, fuera de Git. La inspección confirma ejecutable Mach-O ARM64, bundle `com.mati10p.truedepthprobe`, Xcode 26.6, SDK iOS 26.5 y destino mínimo iOS 17.0; contiene los textos de permiso de cámara y red local.
+
+**Pendiente:** firmar e instalar en el iPhone y recibir datos reales. Ninguna prueba sintética ni compilación confirma la compatibilidad física del teléfono ni de su firma. Este entregable es el primer tramo de fase 0, no su aceptación completa.
 
 ## 1. Ver ahora el receptor funcionando
 
@@ -24,7 +26,7 @@ Python 3.11.9 ya está disponible en esta PC. No hay paquetes Python adicionales
 
 ## 2. Compilar la app
 
-La ruta prevista desde Windows es GitHub Actions, usando un runner macOS estándar dentro de la cuota disponible del repositorio privado. Antes de ejecutarla comprobar minutos y presupuesto en GitHub; no se ha autorizado gasto. No hacen falta credenciales Apple en GitHub.
+La ruta desde Windows usa GitHub Actions con runner macOS estándar. Antes de la primera ejecución se comprobó en la cuenta: 0/3000 minutos usados, 0/2 GB usados, presupuesto Actions de US$0 con consumo pago bloqueado. No se modificó ese presupuesto ni se autorizó gasto. Para futuras compilaciones volver a comprobar disponibilidad. No hacen falta credenciales Apple en GitHub.
 
 1. Subir los cambios de esta implementación al repositorio privado, incluyendo `.github/workflows/ios-probe.yml`.
 2. En GitHub → Actions → **Build TrueDepth Probe (unsigned)** → Run workflow. El disparo es manual; no se ejecuta automáticamente al subir código. GitHub debe conocer el workflow en la rama predeterminada para mostrar su disparo manual.

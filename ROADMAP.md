@@ -17,7 +17,7 @@ Referencias: [contexto](PROJECT_CONTEXT.md), [viabilidad y flujo detallado](docs
 
 ## Fase 0 — Circuito iOS, controles y transporte
 
-Avance 2026-10-16: [primer circuito implementado en código](docs/implementation/FIRST_FRAME.md), receptor probado localmente con datos sintéticos. App iOS pendiente de compilación/instalación y prueba física. REA/ICP en pausa hasta disponer de datos reales.
+Avance 2026-10-16: [primer circuito implementado en código](docs/implementation/FIRST_FRAME.md), receptor probado localmente con datos sintéticos y app iOS compilada en GitHub Actions. IPA descargada y verificada; pendiente firma, instalación y prueba física. REA/ICP en pausa hasta disponer de datos reales.
 
 Entregables:
 

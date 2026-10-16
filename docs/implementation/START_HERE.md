@@ -2,7 +2,7 @@
 
 Fecha: 2026-10-14. Complementa el roadmap aprobado; conserva sus fases y requisitos.
 
-Actualización 2026-10-16: REA/ICP en pausa. Prioridad actual: [circuito mínimo y primer frame real](FIRST_FRAME.md). Hay fuentes de captura iOS y receptor Windows probado con datos sintéticos; compilación, instalación y prueba física siguen pendientes. La investigación descrita debajo se conserva como antecedente.
+Actualización 2026-10-16: REA/ICP en pausa. Prioridad actual: [circuito mínimo y primer frame real](FIRST_FRAME.md). App iOS compilada e IPA descargada y verificada; receptor Windows probado con datos sintéticos. Firma, instalación y prueba física siguen pendientes. La investigación descrita debajo se conserva como antecedente.
 
 ## Primer paso: especificación basada en evidencia de EXStar
 
