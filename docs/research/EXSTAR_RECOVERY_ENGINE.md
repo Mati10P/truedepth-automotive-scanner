@@ -178,3 +178,5 @@ La preparación y primera descompilación duraron 338990,63 ms, aproximadamente 
 El snapshot `realtime-session-snapshot.json` ocupa 649365 bytes y contiene 18 evidencias, con cero entradas primitivas/workflow reutilizables. Conserva evidencia, no una base persistente que evite importar de nuevo. El cierre explícito del binario y del helper terminó correctamente.
 
 La comprobación final comparó los 280 ejecutables/DLL del inventario original: ninguno cambió. El SHA-256 de la DLL analizada coincide con el inicial. El registro local es `realtime-integrity-check.json`; al terminar no quedaron procesos propios de REA/Ghidra de esta sesión.
+
+Continuación: [Generación de candidatos](EXSTAR_REGISTRATION_CANDIDATES.md) sigue `BoardsRegistration` dentro de `CommonFunc.dll` y documenta las características geométricas, las correspondencias, Hough y el filtro por inliers. Las preguntas que aquí figuran como pendientes describen el cierre de la quinta tanda.

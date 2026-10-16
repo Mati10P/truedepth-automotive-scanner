@@ -16,6 +16,7 @@ Inicio de implementación: documentación, inventario reproducible y primer aná
 - [Escaneo de objetos: solicitudes, poses y selección de frames](docs/research/EXSTAR_OBJECT_SCAN.md)
 - [Adaptador de algoritmos: rutas de tracking, resultados y fallos](docs/research/EXSTAR_ALGORITHM_DISPATCH.md)
 - [Motor de recuperación: candidatos, validación y separación de integración](docs/research/EXSTAR_RECOVERY_ENGINE.md)
+- [Generación de candidatos: características, Hough y filtros geométricos](docs/research/EXSTAR_REGISTRATION_CANDIDATES.md)
 
 ## Inventario de EXStar
 
