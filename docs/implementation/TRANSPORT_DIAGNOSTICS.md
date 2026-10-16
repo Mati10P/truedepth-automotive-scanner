@@ -23,7 +23,7 @@ La compilación [38862697352](https://github.com/Mati10P/truedepth-automotive-sc
 python tools/compare_transport.py captures/sequence-20261016T061829Z-0ce35e96 captures/<nueva-sesion>
 ```
 
-El script genera `comparison.json` dentro de la sesión nueva. Referencia física: 2277/2309 frames, 3,8107 Hz, 32 errores (1,3859 %) y pausa máxima de 10,32 s. El nuevo ensayo físico y su conclusión se documentarán después de instalar la app; una prueba local sintética no demuestra mejoras en Wi-Fi.
+El script genera `comparison.json` dentro de la sesión nueva. Referencia física: 2277/2309 frames, 3,8107 Hz, 32 errores (1,3859 %) y pausa máxima de 10,32 s. El [nuevo ensayo físico](PERSISTENT_TRANSPORT_RESULTS.md) terminó: 2889 frames válidos, cero errores, 4,8157 Hz y pausa máxima de 2,24 s.
 
 La app antigua exige `-Transport legacy` o `--transport legacy`. No se degrada silenciosamente de TD2 a TD1, para no atribuir resultados al transporte equivocado.
 
@@ -60,4 +60,4 @@ Envío iOS y recepción Windows se solapan: no se suman ni equivalen por separad
 
 ## Alcance de la validación
 
-Compilación real de iOS verificada mediante Xcode en Actions. Pruebas Python ejercitan TCP local real, fragmentación, reutilización, corrupción, reconexión, tráiler faltante/inválido, límite total ante goteo lento y guardado de métricas. Falta la repetición física para decidir si las pausas disminuyeron y si el transporte permite avanzar al visor 3D.
+Compilación real de iOS verificada mediante Xcode en Actions. Pruebas Python ejercitan TCP local real, fragmentación, reutilización, corrupción, reconexión, tráiler faltante/inválido, límite total ante goteo lento y guardado de métricas. La repetición física de diez minutos confirma una mejora considerable; permanece una pausa aislada de 2,24 s en transferencia/recepción. Hay evidencia suficiente para comenzar un visor experimental, sin declarar resuelta toda la continuidad ni habilitar REA/ICP.
