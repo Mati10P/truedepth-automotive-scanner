@@ -10,11 +10,12 @@ struct ProbeApp: App {
     var body: some Scene {
         WindowGroup {
             VStack(alignment: .leading, spacing: 22) {
-                Text("TrueDepth · primer frame").font(.title.bold())
+                Text("TrueDepth · transporte v2").font(.title.bold())
                 Text(probe.status)
                 Text("IP Wi-Fi: \(Probe.wifiAddress())\nPuerto: 8765")
                 Text("Código: \(probe.token)").font(.system(.title2, design: .monospaced)).textSelection(.enabled)
-                Text("Mantené esta app abierta. La cámara frontal apunta al objeto. En Windows ejecutá Capturar-frame.ps1 con esta IP y código.")
+                Text("Mantené esta app abierta. La cámara frontal apunta al objeto. En Windows ejecutá Capturar-secuencia.ps1 con esta IP y código.")
+                ShareLink("Compartir registro de transporte", item: probe.transport.logURL)
                 Button("Activar TrueDepth") { probe.start() }.buttonStyle(.borderedProminent).disabled(probe.started)
                 Text("Prueba de profundidad solamente. Sin RGB, tracking ni reconstrucción.").font(.footnote)
             }.padding(26)
@@ -28,7 +29,8 @@ final class Probe: NSObject, ObservableObject, AVCaptureDepthDataOutputDelegate 
     let token = UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12).lowercased()
     private let queue = DispatchQueue(label: "truedepth.capture")
     private let session = AVCaptureSession()
-    private var listener: NWListener?
+    let transport = ProbeTransport()
+    private let latestLock = NSLock()
     private var latest: (AVDepthData, CMTime, Date)?
     private var sequence = 0
     private var formats: [[String: Any]] = []
@@ -40,7 +42,10 @@ final class Probe: NSObject, ObservableObject, AVCaptureDepthDataOutputDelegate 
         AVCaptureDevice.requestAccess(for: .video) { granted in
             guard granted else { self.report("Permiso de cámara denegado. Habilitalo en Ajustes."); return }
             self.queue.async {
-                do { try self.configure(); self.session.startRunning(); try self.serve() }
+                do {
+                    try self.configure(); self.session.startRunning()
+                    try self.transport.start(token: self.token, packet: { try self.packet() }, report: self.report)
+                }
                 catch { self.report("Error: \(error.localizedDescription). Cerrá y reabrí la app para reintentar.") }
             }
         }
@@ -94,41 +99,18 @@ final class Probe: NSObject, ObservableObject, AVCaptureDepthDataOutputDelegate 
     }
     func depthDataOutput(_ output: AVCaptureDepthDataOutput, didOutput depthData: AVDepthData,
                          timestamp: CMTime, connection: AVCaptureConnection) {
+        latestLock.lock()
         latest = (depthData, timestamp, Date())
         sequence += 1
-        if sequence == 1 { report("TrueDepth activo. Esperando solicitud de Windows.") }
-    }
-    private func serve() throws {
-        let server = try NWListener(using: .tcp, on: 8765)
-        listener = server
-        server.stateUpdateHandler = { state in
-            if case .failed(let error) = state { self.report("Red: \(error.localizedDescription)") }
-        }
-        server.newConnectionHandler = { connection in
-            connection.start(queue: self.queue)
-            self.queue.asyncAfter(deadline: .now() + 10) { connection.cancel() }
-            self.receiveRequest(connection, accumulated: Data())
-        }
-        server.start(queue: queue)
-    }
-    private func receiveRequest(_ connection: NWConnection, accumulated: Data) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 128) { chunk, _, complete, error in
-            var request = accumulated
-            if let chunk = chunk { request.append(chunk) }
-            guard error == nil, request.count <= 128 else { connection.cancel(); return }
-            if request.contains(10) {
-                guard String(data: request, encoding: .utf8) == "TD1 \(self.token)\n" else { connection.cancel(); return }
-                do {
-                    let packet = try self.packet()
-                    connection.send(content: packet, completion: .contentProcessed { _ in connection.cancel() })
-                    self.report("Frame preparado para Windows. Sensor activo.")
-                } catch { self.report(error.localizedDescription); connection.cancel() }
-            } else if complete { connection.cancel() }
-            else { self.receiveRequest(connection, accumulated: request) }
-        }
+        let first = sequence == 1
+        latestLock.unlock()
+        if first { report("TrueDepth activo. Esperando solicitud de Windows.") }
     }
     private func packet() throws -> Data {
-        guard let (source, timestamp, arrival) = latest, Date().timeIntervalSince(arrival) < 2 else {
+        latestLock.lock()
+        let snapshot = latest, frameID = sequence
+        latestLock.unlock()
+        guard let (source, timestamp, arrival) = snapshot, Date().timeIntervalSince(arrival) < 2 else {
             throw failure("Sin frame reciente. Mantené la app abierta y reintentá.")
         }
         let depth = source.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
@@ -154,7 +136,7 @@ final class Probe: NSObject, ObservableObject, AVCaptureDepthDataOutputDelegate 
             ] as [String: Any]
         }
         let header: [String: Any] = [
-            "protocol": "td-frame/1", "source": "iphone-truedepth", "frame_id": sequence,
+            "protocol": "td-frame/1", "source": "iphone-truedepth", "frame_id": frameID,
             "width": w, "height": h, "encoding": "float32-le", "units": "meters",
             "payload_bytes": raw.count, "sha256": SHA256.hash(data: raw).map { String(format: "%02x", $0) }.joined(),
             "timestamp": ["value": timestamp.value, "timescale": timestamp.timescale, "seconds": CMTimeGetSeconds(timestamp), "clock": "capture-session"],
