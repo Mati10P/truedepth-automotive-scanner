@@ -4,7 +4,10 @@ Escáner de mano con iPhone TrueDepth y estación Windows para captura recuperab
 
 ## Estado
 
-Inicio de implementación: documentación, inventario reproducible y primer análisis estático de EXStar con REA/Ghidra. Aún no hay app de captura ni motor de reconstrucción funcional. El desarrollo se mantiene inicialmente en el [repositorio privado de GitHub](https://github.com/Mati10P/truedepth-automotive-scanner); se hará público cuando esté listo. La selección de licencia open source está pendiente antes de esa publicación.
+Circuito mínimo en implementación: fuente de app iOS TrueDepth, workflow de compilación sin firma y receptor/visor Windows con pruebas sintéticas verificadas. Pendiente compilar e instalar la app y recibir el primer frame real del iPhone 16e (iOS 26.6). REA/ICP quedan en pausa; todavía no hay motor de reconstrucción. El desarrollo se mantiene inicialmente en el [repositorio privado de GitHub](https://github.com/Mati10P/truedepth-automotive-scanner); se hará público cuando esté listo. La selección de licencia open source está pendiente antes de esa publicación.
+
+- **[Primer frame: ejecutar, compilar e instalar](docs/implementation/FIRST_FRAME.md)**
+- Demo local: `python apps/windows/receive_frame.py --demo`
 
 - [Contexto del proyecto](PROJECT_CONTEXT.md)
 - [Plan completo](ROADMAP.md)

@@ -16,6 +16,7 @@ captures/
 *.p12
 *.mobileprovision
 *.ipa
+apps/ios/*.xcodeproj/
 
 # Local reference evidence; preserve on disk, exclude from publication
 docs/references/*.png

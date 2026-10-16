@@ -1,0 +1,20 @@
+name: TrueDepthProbe
+options:
+  deploymentTarget:
+    iOS: '17.0'
+targets:
+  TrueDepthProbe:
+    type: application
+    platform: iOS
+    sources: [TrueDepthProbe]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mati10p.truedepthprobe
+        SWIFT_VERSION: '5.0'
+        TARGETED_DEVICE_FAMILY: '1'
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSCameraUsageDescription: Capturar profundidad TrueDepth para verla en tu PC.
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Entregar un frame de profundidad a tu PC por Wi-Fi.
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        CODE_SIGNING_ALLOWED: NO
