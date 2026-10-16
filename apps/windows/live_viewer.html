@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>TrueDepth · capturas sucesivas</title>
+<style>
+body{margin:0;background:#101820;color:#e4eef5;font:16px system-ui,sans-serif;padding:28px;max-width:1200px;margin:auto}
+h1{font-size:28px}.tag{color:#70dbc9}main{display:grid;grid-template-columns:2fr 1fr;gap:24px}
+canvas{width:100%;image-rendering:pixelated;background:#000;border-radius:8px}aside{background:#1b2935;padding:20px;border-radius:8px}
+p{line-height:1.5}label{display:inline-block;margin:10px 12px 10px 0}input{width:70px;padding:6px}
+dt{color:#aac0ce;margin-top:12px}dd{margin:3px 0;font-size:21px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
+@media(max-width:760px){main{grid-template-columns:1fr}body{padding:16px}}
+</style>
+<p class="tag">TRUEDEPTH / CONTINUIDAD DE CAPTURA</p><h1 id="title">Capturas sucesivas</h1>
+<p id="status" role="status">Conectando con el receptor local…</p>
+<main><section><canvas id="depth" width="640" height="480"></canvas>
+<p id="frame">Todavía no hay un frame verificado.</p><p id="hover">Mové el cursor para consultar profundidad.</p>
+<label>Mínimo (m) <input id="near" type="number" step="0.05" value="0.2"></label>
+<label>Máximo (m) <input id="far" type="number" step="0.05" value="1.0"></label>
+<p>Azul: cerca · amarillo: lejos · negro: lectura inválida. Orientación nativa, sin rectificación. La escala de color no determina precisión ni alcance.</p>
+</section><aside><h2>Medición de la sesión</h2><dl id="metrics"></dl>
+<p id="preview"></p>
+<p id="transport"></p><p id="timings"></p>
+<p>El retraso mide solicitud → payload verificado en Windows. La latencia sensor → pantalla todavía no está medida.</p>
+<p>Los saltos entre IDs son frames del sensor no muestreados; no prueban pérdidas de red. TCP puede retransmitir sin que este contador lo detecte.</p>
+<p>Los resultados se guardan en CSV y JSON. Los originales solo se guardan con <code>--save-depth</code>. Detener: Ctrl+C en la consola.</p></aside></main>
+<details><summary>Metadatos del último frame</summary><pre id="metadata"></pre></details>
+<script>
+const $=id=>document.getElementById(id),canvas=$('depth'),ctx=canvas.getContext('2d');
+let data=null,lastAttempt=null,shown=0,omitted=0,lastArrival=null,finished=false;
+const format=(x,d=1)=>typeof x==='number'&&Number.isFinite(x)?x.toFixed(d):'—';
+function render(){if(!data)return;const lo=Number($('near').value),hi=Number($('far').value);if(!Number.isFinite(lo)||!Number.isFinite(hi)||hi<=lo)return;
+const img=ctx.createImageData(canvas.width,canvas.height);let valid=0;
+for(let i=0;i<canvas.width*canvas.height;i++){const z=data.getFloat32(i*4,true),p=i*4;img.data[p+3]=255;
+if(!Number.isFinite(z)||z<=0)continue;valid++;const t=Math.max(0,Math.min(1,(z-lo)/(hi-lo)));
+img.data[p]=255*t;img.data[p+1]=100+155*t;img.data[p+2]=255*(1-t);}ctx.putImageData(img,0,0);return valid;}
+$('near').oninput=$('far').oninput=render;
+canvas.onmousemove=e=>{if(!data)return;const r=canvas.getBoundingClientRect(),x=Math.min(canvas.width-1,Math.max(0,Math.floor((e.clientX-r.left)*canvas.width/r.width))),y=Math.min(canvas.height-1,Math.max(0,Math.floor((e.clientY-r.top)*canvas.height/r.height)));
+const z=data.getFloat32((y*canvas.width+x)*4,true);$('hover').textContent=`Píxel (${x}, ${y}): ${Number.isFinite(z)&&z>0?z.toFixed(5)+' m':'sin lectura válida'}`;};
+async function poll(){try{const response=await fetch('/state',{cache:'no-store'});if(!response.ok)throw new Error('HTTP '+response.status);
+const state=await response.json(),m=state.metrics,f=state.frame;finished=state.finished;
+$('status').textContent=state.status;
+$('transport').textContent=state.transport?`Transporte: ${state.transport} · conexiones abiertas en la sesión: ${state.connections??0} · pausa máxima entre válidos: ${format(m.max_valid_gap_s,2)} s`:'';
+const t=state.timings??{};
+$('timings').textContent=state.transport==='persistent'?`Último frame: preparación iOS ${format(t.ios_prepare_ms)} ms · envío iOS ${format(t.ios_send_ms)} ms · recepción del payload ${format(t.payload_receive_ms)} ms · validación ${format(t.validation_ms)} ms. Envío y recepción se solapan; no se suman.`:'';
+const entries=[['Recibidos / solicitudes',`${m.received??0} / ${m.attempts??0}`],['Frecuencia recibida (media)',format(m.received_hz)+' Hz'],['Sensor (estimación entre IDs)',format(m.sensor_hz_estimate)+' Hz'],['Solicitud: media / p95 / máximo',`${format(m.request_ms_mean)} / ${format(m.request_ms_p95)} / ${format(m.request_ms_max)} ms`],['Solicitudes fallidas',m.errors??0],['Frames únicos / duplicados',`${m.unique??0} / ${m.duplicates??0}`],['Frames del sensor no muestreados',m.skipped_sensor_frames??0],['Discontinuidades de ID/reloj',m.discontinuities??0]];
+$('metrics').replaceChildren(...entries.flatMap(([label,value])=>{const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=label;dd.textContent=value;return [dt,dd];}));
+if(f&&f.attempt!==lastAttempt){const h=f.header,bytes=Uint8Array.from(atob(f.raw),c=>c.charCodeAt(0));data=new DataView(bytes.buffer);canvas.width=h.width;canvas.height=h.height;
+// Count successful receiver frames omitted by this browser, including background-tab throttling.
+if(lastAttempt!==null)omitted+=Math.max(0,m.received-shownReceived-1);
+lastAttempt=f.attempt;shownReceived=m.received;shown++;lastArrival=Date.parse(f.received_at_utc);
+const valid=render();$('title').textContent=h.source==='synthetic-demo'?'DEMO SINTÉTICA · sin iPhone':'iPhone TrueDepth · capturas sucesivas';
+$('frame').textContent=`Frame ${h.frame_id} · ${h.width} × ${h.height} · ${valid} píxeles válidos · SHA-256 verificado · ${h.calibration?'calibración disponible':'sin calibración'}`;
+$('metadata').textContent=JSON.stringify(h,null,2);}
+}catch(error){$('status').textContent='Receptor no disponible: '+error.message;}
+finally{if(lastArrival!==null)$('preview').textContent=`Vista: ${shown} actualizaciones, ${omitted} recibidos omitidos en esta pestaña. Última recepción hace ${format(Math.max(0,(Date.now()-lastArrival)/1000))} s${finished?' · sesión terminada':''}.`;setTimeout(poll,200);}}
+let shownReceived=0;poll();
+</script></html>

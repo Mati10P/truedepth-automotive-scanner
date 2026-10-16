@@ -8,6 +8,7 @@ import math
 from pathlib import Path
 import socket
 import struct
+import time
 import uuid
 import webbrowser
 from datetime import datetime, timezone
@@ -47,15 +48,23 @@ def validate_header(header):
         raise ValueError("Falta estado de calibración")
 
 
-def read_packet(sock):
+def read_packet(sock, timings=None):
+    began = time.perf_counter()
     size = struct.unpack(">I", exact(sock, 4))[0]
     if not 0 < size <= MAX_HEADER:
         raise ValueError("Cabecera demasiado grande o vacía")
     header = json.loads(exact(sock, size))
     validate_header(header)
+    payload_start = time.perf_counter()
     raw = exact(sock, header["payload_bytes"])
+    payload_end = time.perf_counter()
     if hashlib.sha256(raw).hexdigest() != header["sha256"]:
         raise ValueError("SHA-256 incorrecto: se rechaza el frame")
+    if timings is not None:
+        timings.update(header_ms=(payload_start - began) * 1000,
+                       payload_receive_ms=(payload_end - payload_start) * 1000,
+                       validation_ms=(time.perf_counter() - payload_end) * 1000,
+                       frame_arrival= time.perf_counter())
     return header, raw
 
 
