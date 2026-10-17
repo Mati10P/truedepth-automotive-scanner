@@ -1,6 +1,6 @@
 # RGB y profundidad sincronizados — app v3
 
-2026-10-16. Implementado y compilado; **instalación y captura física RGB-D pendientes**. La app anterior sigue activa en el teléfono: se verificó una solicitud depth con la conexión actual, sin metadatos de captura v3. Los códigos de acceso no se guardan en esta documentación.
+2026-10-16. Implementado y compilado. **Instalación y primer ensayo físico verificados:** [10 pares RGB-D únicos sin errores](FIRST_RGBD_RESULTS.md), ambos canales 640 × 480 y timestamps idénticos. La información de preparación que sigue se conserva; las limitaciones de validación geométrica continúan. Los códigos de acceso no se guardan en esta documentación.
 
 ## Instalación preparada
 
