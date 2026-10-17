@@ -13,8 +13,10 @@ targets:
         SWIFT_VERSION: '5.0'
         TARGETED_DEVICE_FAMILY: '1'
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_NSCameraUsageDescription: Capturar profundidad TrueDepth para verla en tu PC.
-        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Entregar un frame de profundidad a tu PC por Wi-Fi.
+        MARKETING_VERSION: '0.3.0'
+        CURRENT_PROJECT_VERSION: '3'
+        INFOPLIST_KEY_NSCameraUsageDescription: Capturar color y profundidad TrueDepth sincronizados para analizarlos en tu PC.
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Entregar RGB y profundidad a tu PC por Wi-Fi.
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
         CODE_SIGNING_ALLOWED: NO

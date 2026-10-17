@@ -68,7 +68,7 @@ final class ProbeTransport {
         networkQueue.asyncAfter(deadline: .now() + 15, execute: timer)
     }
 
-    func start(token: String, packet: @escaping () throws -> Data, report: @escaping (String) -> Void) throws {
+    func start(token: String, packet: @escaping (Bool) throws -> Data, report: @escaping (String) -> Void) throws {
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
         let server = try NWListener(using: NWParameters(tls: nil, tcp: tcp), on: 8765)
@@ -97,7 +97,7 @@ final class ProbeTransport {
     }
 
     private func receive(_ client: Client, token: String, accumulated: Data,
-                         packet: @escaping () throws -> Data, report: @escaping (String) -> Void) {
+                         packet: @escaping (Bool) throws -> Data, report: @escaping (String) -> Void) {
         client.connection.receive(minimumIncompleteLength: 1, maximumLength: 128) { chunk, _, complete, error in
             guard self.clients[client.id] != nil else { return }
             var request = accumulated
@@ -112,7 +112,7 @@ final class ProbeTransport {
             let legacy = line == "TD1 \(token)\n"
             let parts = line.dropLast().split(separator: " ", omittingEmptySubsequences: false)
             if !legacy {
-                guard line.last == "\n", parts.count == 3, parts[0] == "TD2", parts[1] == token,
+                guard line.last == "\n", parts.count == 3, (parts[0] == "TD2" || parts[0] == "TD3"), parts[1] == token,
                       let id = UInt64(parts[2]), id > client.requestID else {
                     self.close(client, "invalid_request"); return
                 }
@@ -120,11 +120,12 @@ final class ProbeTransport {
             }
             self.arm(client)
             let received = ProcessInfo.processInfo.systemUptime
-            self.log("request_received", client, ["mode": legacy ? "TD1" : "TD2"])
+            let rgbd = !legacy && parts[0] == "TD3"
+            self.log("request_received", client, ["mode": legacy ? "TD1" : (rgbd ? "TD3" : "TD2")])
             self.preparationQueue.async {
                 let began = ProcessInfo.processInfo.systemUptime
                 do {
-                    let data = try packet()
+                    let data = try packet(rgbd)
                     let prepared = ProcessInfo.processInfo.systemUptime
                     self.networkQueue.async {
                         guard self.clients[client.id] != nil else { return }
