@@ -18,6 +18,7 @@ from receive_frame import read_packet, demo_packet
 from frame_transport import FrameTransport
 
 TIMING_FIELDS = ['request_id', 'connection_number', 'connect_ms', 'request_send_ms',
+                 'rgb_receive_validate_ms',
                  'first_byte_ms', 'header_ms', 'payload_receive_ms', 'validation_ms',
                  'telemetry_ms', 'frame_request_ms', 'ios_queue_ms', 'ios_prepare_ms',
                  'ios_dispatch_ms', 'ios_send_ms', 'ios_connection_id', 'ios_session_id',
@@ -82,6 +83,11 @@ class Preview:
     def __init__(self):
         self.lock = threading.Lock()
         self.state = dict(status='Esperando primera captura', finished=False, metrics={}, frame=None)
+        self.last_unique_arrival = None
+
+    def note_unique(self, arrival):
+        with self.lock:
+            self.last_unique_arrival = arrival
 
     def update(self, **fields):
         with self.lock:
@@ -89,15 +95,22 @@ class Preview:
 
     def encode(self):
         with self.lock:
-            return json.dumps(self.state, ensure_ascii=False, allow_nan=False).encode('utf-8')
+            state = dict(self.state)
+            state['unique_age_s'] = (max(0, time.perf_counter() - self.last_unique_arrival)
+                                     if self.last_unique_arrival is not None else None)
+            return json.dumps(state, ensure_ascii=False, allow_nan=False).encode('utf-8')
 
 
-def make_server(preview):
+def make_server(preview, viewer='depth'):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             if self.path == '/':
-                body = Path(__file__).with_name('live_viewer.html').read_bytes()
+                name = {'cloud':'point_cloud.html','rgbd':'rgbd_viewer.html'}.get(viewer,'live_viewer.html')
+                body = Path(__file__).with_name(name).read_bytes()
                 mime = 'text/html; charset=utf-8'
+            elif self.path in ('/point_cloud.js', '/cloud_math.js'):
+                body = Path(__file__).with_name(self.path[1:]).read_bytes()
+                mime = 'text/javascript; charset=utf-8'
             elif self.path == '/state':
                 body, mime = preview.encode(), 'application/json'
             else:
@@ -132,6 +145,9 @@ def synthetic_frame(index, seconds):
     header, raw = read_packet(MemorySocket())
     header['frame_id'] = index
     header['timestamp'] = dict(value=round(seconds * 1_000_000), timescale=1_000_000, clock='synthetic')
+    header['calibration'] = dict(intrinsic_matrix_rows=[[140, 0, 80], [0, 140, 60], [0, 0, 1]],
+                                 intrinsic_reference_width=160, intrinsic_reference_height=120,
+                                 synthetic=True)
     return header, raw
 
 
@@ -173,6 +189,8 @@ def capture(args, folder, preview, stop):
                     if type(header.get('frame_id')) is not int or header['frame_id'] < 0:
                         raise ValueError('frame_id inválido para medir continuidad')
                     event = metrics.accept(header, elapsed_ms, arrived)
+                    if event != 'duplicate':
+                        preview.note_unique(arrived)
                     for name in stages:
                         if name in timings:
                             stages[name].append(timings[name])
@@ -185,12 +203,16 @@ def capture(args, folder, preview, stop):
                             frame_dir = folder / f'frame-{metrics.attempts:06d}'
                             frame_dir.mkdir()
                             (frame_dir / 'depth.f32le').write_bytes(raw)
+                            if transport and transport.rgb is not None:
+                                (frame_dir / 'rgb.png').write_bytes(transport.rgb)
                             (frame_dir / 'metadata.json').write_text(json.dumps(header, indent=2), encoding='utf-8')
                         except OSError as exc:
                             raise RuntimeError(f'No se pudo guardar el frame: {exc}') from exc
                     preview.update(status='Recibiendo', frame=dict(header=header,
                                    raw=base64.b64encode(raw).decode('ascii'), attempt=metrics.attempts,
+                                   rgb=base64.b64encode(transport.rgb).decode('ascii') if transport and transport.rgb is not None else None,
                                    received_at_utc=utc), metrics=metrics.snapshot(),
+                                   frame_event=event,
                                    transport=mode, connections=transport.connections if transport else 0,
                                    timings={k: v for k, v in timings.items() if k in TIMING_FIELDS})
                 except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -219,10 +241,10 @@ def capture(args, folder, preview, stop):
                                    maximum=max(v), count=len(v)) for name, v in stages.items() if v}
         summary = dict(status=status, synthetic=args.demo, duration_s=time.perf_counter() - start,
                        transport=mode, connections=transport.connections if transport else 0,
-                       reconnects=max(0, transport.connections - 1) if transport and mode == 'persistent' else 0,
+                       reconnects=max(0, transport.connections - 1) if transport and mode != 'legacy' else 0,
                        timing_ms=stage_summary, errors_by_message=errors,
                        target_hz=args.fps, saved_depth=args.save_depth, metrics=metrics.snapshot(),
-                       latency_definition='Request start to complete validated payload; not sensor-to-screen latency',
+                       latency_definition='Request start to complete validated depth/RGB payloads; not sensor-to-screen latency',
                        skipped_definition='Sensor sequence IDs between requests, not network packet loss')
         (folder / 'summary.json').write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding='utf-8')
         preview.update(status=status, finished=True, metrics=metrics.snapshot())
@@ -242,7 +264,8 @@ def main():
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--token')
     parser.add_argument('--demo', action='store_true')
-    parser.add_argument('--transport', choices=['persistent', 'legacy'], default='persistent',
+    parser.add_argument('--viewer', choices=['depth', 'cloud', 'rgbd'], default='depth')
+    parser.add_argument('--transport', choices=['persistent', 'legacy', 'rgbd'], default='persistent',
                         help='persistent requiere la app transporte v2; legacy usa una conexión por frame')
     parser.add_argument('--fps', type=positive, default=5)
     parser.add_argument('--duration', type=positive, default=600)
@@ -252,6 +275,11 @@ def main():
     parser.add_argument('--exit-on-complete', action='store_true')
     parser.add_argument('--output', type=Path, default=Path(__file__).resolve().parents[2] / 'captures')
     args = parser.parse_args()
+    if args.transport == 'rgbd':
+        args.viewer = 'rgbd'
+        args.save_depth = True
+        if args.demo:
+            parser.error('La demo existente es depth-only; no simula sincronización RGB-D')
     if not args.demo:
         args.host = args.host or input('IP Wi-Fi del iPhone: ').strip()
         args.token = (args.token or input('Código de la app: ')).strip().lower()
@@ -260,7 +288,7 @@ def main():
     folder = args.output.resolve() / ('sequence-' + datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ') + '-' + uuid.uuid4().hex[:8])
     folder.mkdir(parents=True)
     preview, stop = Preview(), threading.Event()
-    server = make_server(preview)
+    server = make_server(preview, args.viewer)
     serving = threading.Thread(target=server.serve_forever, daemon=True)
     serving.start()
     url = f'http://127.0.0.1:{server.server_port}/'

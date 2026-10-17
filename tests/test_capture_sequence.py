@@ -7,6 +7,7 @@ import tempfile
 import threading
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 from urllib.request import urlopen
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'apps/windows'))
@@ -14,6 +15,34 @@ import capture_sequence as c
 
 
 class SequenceTests(unittest.TestCase):
+    def test_preview_age_uses_monotonic_clock_and_survives_errors(self):
+        preview = c.Preview()
+        self.assertIsNone(json.loads(preview.encode())['unique_age_s'])
+        preview.note_unique(10)
+        preview.update(status='Error de solicitud')
+        with patch.object(c.time, 'perf_counter', return_value=12.24):
+            self.assertAlmostEqual(json.loads(preview.encode())['unique_age_s'], 2.24)
+        preview.note_unique(12.3)
+        with patch.object(c.time, 'perf_counter', return_value=12.4):
+            self.assertAlmostEqual(json.loads(preview.encode())['unique_age_s'], .1)
+
+    def test_cloud_routes_and_synthetic_calibration(self):
+        server = c.make_server(c.Preview(), 'cloud')
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            url = f'http://127.0.0.1:{server.server_port}'
+            for path, marker in [('/', 'VISOR EXPERIMENTAL'), ('/cloud_math.js', 'intrinsics'),
+                                 ('/point_cloud.js', 'webgl')]:
+                with urlopen(url + path) as response:
+                    self.assertIn(marker, response.read().decode())
+            h, _ = c.synthetic_frame(1, .2)
+            self.assertTrue(h['calibration']['synthetic'])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
     def test_duplicates_gaps_and_reset(self):
         m = c.Metrics()
         for frame_id, timestamp, arrival in [(10, 1, 0), (10, 1, .1), (13, 1.1, .2), (1, .1, .3)]:

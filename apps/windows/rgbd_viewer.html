@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>TrueDepth · par RGB-D</title>
+<style>
+body{background:#101820;color:#e4eef5;font:16px system-ui;margin:0;padding:24px}h1{font-size:26px}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:20px}canvas{display:block;width:100%;background:#000;cursor:crosshair}
+button,input{font:inherit;padding:8px;margin:5px}button{cursor:pointer}input{width:80px}pre{white-space:pre-wrap;overflow-wrap:anywhere}
+.muted{color:#b3c7d5}#points{max-height:200px;overflow:auto}a{color:#70dbc9}
+@media(max-width:800px){.pair{grid-template-columns:1fr}}
+</style>
+<h1>RGB y profundidad · mismo instante</h1>
+<p id="status" role="status">Esperando un par verificado…</p>
+<button id="freeze">Congelar par</button><button id="rotate">Girar vista 180°</button>
+<button id="clear">Borrar marcas</button><button id="save">Guardar marcas</button>
+<label>Depth mín. <input id="near" type="number" value="0.2" step="0.05"></label>
+<label>máx. <input id="far" type="number" value="1" step="0.05"></label>
+<div class="pair"><section><h2>Color</h2><canvas id="rgb"></canvas></section>
+<section><h2>Profundidad</h2><canvas id="depth"></canvas></section></div>
+<p id="identity"></p><p id="cursor" class="muted">Al marcar se congela el par. Las coordenadas guardadas siempre son nativas.</p>
+<p class="muted">Las imágenes conservan sus tamaños originales. La sincronización temporal no valida su alineación geométrica: las marcas de color y profundidad son independientes. Negro en depth significa lectura inválida.</p>
+<pre id="points"></pre><details><summary>Metadatos del par</summary><pre id="metadata"></pre></details>
+<script>
+const $=id=>document.getElementById(id);
+let current=null,color=null,depth=null,frozen=false,turned=false,marks=[],lastAttempt=null;
+function draw(){if(!current)return;const h=current.header;
+ for(const name of ['rgb','depth']){const c=$(name),ctx=c.getContext('2d');c.width=name==='rgb'?h.rgb.width:h.width;c.height=name==='rgb'?h.rgb.height:h.height;
+ ctx.save();if(turned){ctx.translate(c.width,c.height);ctx.rotate(Math.PI);}
+ if(name==='rgb')ctx.drawImage(color,0,0);else{const lo=Number($('near').value),hi=Number($('far').value);if(!(hi>lo)){ctx.restore();continue;}
+ const image=new ImageData(c.width,c.height);for(let i=0;i<c.width*c.height;i++){const z=depth.getFloat32(i*4,true),p=i*4;image.data[p+3]=255;if(!Number.isFinite(z)||z<=0)continue;
+ const t=Math.max(0,Math.min(1,(z-lo)/(hi-lo)));image.data[p]=255*t;image.data[p+1]=100+155*t;image.data[p+2]=255*(1-t);}
+ const off=document.createElement('canvas');off.width=c.width;off.height=c.height;off.getContext('2d').putImageData(image,0,0);ctx.drawImage(off,0,0);}
+ ctx.restore();for(const m of marks.filter(p=>p.channel===name)){const x=turned?c.width-1-m.x:m.x,y=turned?c.height-1-m.y:m.y;const r=Math.max(4,c.width/160);ctx.strokeStyle='#ff5252';ctx.lineWidth=Math.max(2,c.width/400);ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.stroke();ctx.font=`${Math.max(14,c.width/45)}px sans-serif`;ctx.fillStyle='#fff';ctx.fillText(m.id,x+r,y-r);}}
+ $('points').textContent=JSON.stringify(marks,null,2);
+}
+function setFrozen(value){frozen=value;$('freeze').textContent=frozen?'Reanudar vista':'Congelar par';}
+$('freeze').onclick=()=>{if(frozen){marks=[];draw();}setFrozen(!frozen);};
+$('rotate').onclick=()=>{turned=!turned;draw();};$('clear').onclick=()=>{marks=[];draw();};
+$('near').oninput=$('far').oninput=draw;
+for(const name of ['rgb','depth']){$(name).onclick=e=>{if(!current)return;setFrozen(true);const c=$(name),r=c.getBoundingClientRect();let x=Math.min(c.width-1,Math.max(0,Math.floor((e.clientX-r.left)*c.width/r.width))),y=Math.min(c.height-1,Math.max(0,Math.floor((e.clientY-r.top)*c.height/r.height)));if(turned){x=c.width-1-x;y=c.height-1-y;}
+ const z=name==='depth'?depth.getFloat32((y*c.width+x)*4,true):null;marks.push({id:marks.length+1,channel:name,x,y,depth_m:Number.isFinite(z)&&z>0?z:null});draw();};}
+$('save').onclick=()=>{if(!current)return;const h=current.header;const record={frame_id:h.frame_id,depth_sha256:h.sha256,rgb_sha256:h.rgb.sha256,timestamp:h.timestamp,display_rotation_degrees:turned?180:0,coordinate_system:'native pixels; independent channels',marks};const url=URL.createObjectURL(new Blob([JSON.stringify(record,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=`marks-frame-${h.frame_id}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+async function apply(f){if(!f?.rgb||!f.header.rgb)return;const image=new Image();image.src='data:image/png;base64,'+f.rgb;await image.decode();if(frozen)return;
+ const bytes=Uint8Array.from(atob(f.raw),c=>c.charCodeAt(0));if(bytes.length!==f.header.width*f.header.height*4)throw Error('Depth incompleto');
+ current=f;color=image;depth=new DataView(bytes.buffer);marks=[];lastAttempt=f.attempt;draw();const h=f.header;
+ if(h.source==='synthetic-demo')document.querySelector('h1').textContent='DEMO SINTÉTICA · RGB y profundidad';
+ $('identity').textContent=`Par ${h.frame_id} · RGB ${h.rgb.width} × ${h.rgb.height} · depth ${h.width} × ${h.height} · diferencia temporal ${h.synchronization.timestamp_delta_ms.toFixed(3)} ms · ambos SHA-256 verificados`;
+ $('metadata').textContent=JSON.stringify(h,null,2);}
+async function poll(){try{const response=await fetch('/state',{cache:'no-store'});if(!response.ok)throw Error('HTTP '+response.status);const s=await response.json();$('status').textContent=`${s.status} · ${s.metrics.unique??0} pares únicos · ${s.metrics.errors??0} errores${frozen?' · vista congelada':''}`;if(!frozen&&s.frame&&s.frame.attempt!==lastAttempt)await apply(s.frame);}catch(e){$('status').textContent='Receptor no disponible: '+e.message;}finally{setTimeout(poll,400);}}
+const embedded=/*PAIR_DATA*/null;
+if(embedded){apply(embedded).then(()=>{setFrozen(true);$('freeze').disabled=true;$('freeze').textContent='Par guardado';$('status').textContent='Par guardado · vista congelada';});}else poll();
+</script></html>

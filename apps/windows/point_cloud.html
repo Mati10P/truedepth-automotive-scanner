@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>TrueDepth · nube experimental</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#101820;color:#e4eef5;font:15px system-ui,sans-serif}
+header{padding:18px 24px;border-bottom:1px solid #344451}h1{font-size:23px;margin:5px 0}.tag{color:#70dbc9;font-size:12px;letter-spacing:2px}
+main{display:grid;grid-template-columns:250px minmax(0,1fr);min-height:75vh}aside{padding:20px;background:#1b2935}section{padding:20px;min-width:0}
+p{line-height:1.5}label{display:block;margin:16px 0}input,select,button{font:inherit;padding:8px;border:1px solid #526676;border-radius:5px;background:#243746;color:#fff}input,select{width:100%;margin-top:6px}button{cursor:pointer;margin:5px 4px 5px 0}button:disabled{opacity:.4}
+canvas{display:block;width:100%;height:58vh;min-height:300px;background:#0a1118;touch-action:none;border:1px solid #344451;border-radius:8px}
+#badge{display:inline-block;padding:7px 12px;background:#354550;border-radius:5px}#badge[data-live=true]{background:#185548}#badge[data-live=false]{background:#735321}
+.muted{color:#afc0cc;font-size:13px}#error{color:#ffb6a6}dl{font-size:13px}dt{color:#afc0cc;margin-top:12px}dd{margin:3px 0}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}details{padding:0 24px 20px}
+@media(min-width:601px) and (max-width:900px){main{grid-template-columns:200px minmax(0,1fr)}aside,section{padding:12px}}
+@media(max-width:600px){main{display:flex;flex-direction:column}section{order:-1}aside{display:flex;flex-wrap:wrap;gap:12px}aside>*{max-width:230px}canvas{height:50vh}}
+</style>
+<header><span class="tag">TRUEDEPTH / VISOR EXPERIMENTAL</span><h1 id="title">Nube de puntos · un frame</h1>
+<span id="badge" role="status">Esperando primer frame</span> <span id="age"></span></header>
+<main><aside><div><h2>Profundidad</h2>
+<label>Mínimo (m)<input id="near" type="number" min="0.01" step="0.05" value="0.2"></label>
+<label>Máximo (m)<input id="far" type="number" min="0.02" step="0.05" value="1.0"></label>
+<label>Muestreo<select id="stride"><option value="2">Cada 2 píxeles</option><option value="4" selected>Cada 4 píxeles</option><option value="8">Cada 8 píxeles</option></select></label>
+<label>Tamaño de punto<input id="size" type="range" min="1" max="6" value="2"></label>
+<p class="muted">Color por profundidad: azul cerca, amarillo lejos. Los puntos fuera del rango se ocultan.</p></div>
+<div><h2>Recepción</h2><p id="receiver">Conectando…</p><dl id="metrics"></dl>
+<p class="muted">La antigüedad cuenta desde la recepción de un frame distinto en Windows. No mide latencia del sensor.</p></div></aside>
+<section><canvas id="cloud" aria-label="Nube de puntos interactiva"></canvas>
+<div><button id="pause">Pausar vista</button><button id="reset">Restablecer cámara</button></div>
+<p class="muted">Arrastrar: girar · rueda: zoom · Mayús + arrastrar: desplazar. Pausar vista permite inspeccionar; la captura y el registro continúan. Al reanudar se muestra el último frame disponible.</p>
+<p id="frame">Sin nube disponible.</p><p id="error" role="alert"></p>
+<p class="muted">Coordenadas de cámara en metros. Proyección pinhole experimental, sin rectificación de lente ni validación dimensional. Cada frame reemplaza al anterior: sin acumulación, tracking ni reconstrucción. REA/ICP en pausa.</p>
+</section></main>
+<details><summary>Metadatos del frame mostrado</summary><pre id="metadata"></pre></details>
+<script src="/cloud_math.js"></script><script src="/point_cloud.js"></script></html>
