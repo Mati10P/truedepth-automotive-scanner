@@ -8,52 +8,26 @@ import CoreImage
 @main
 struct ProbeApp: App {
     @StateObject private var probe = Probe()
-    @State private var previewUpsideDown = true
-    @State private var previewMagnified = false
     var body: some Scene {
         WindowGroup {
             ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                Text("TrueDepth · RGB-D v5").font(.title.bold())
+                Text("TrueDepth · RGB-D v6").font(.title.bold())
                 Button("Activar TrueDepth") { probe.start() }.buttonStyle(.borderedProminent).disabled(probe.started)
-                TimelineView(.periodic(from: .now, by: 1)) { timeline in
-                    let fresh = timeline.date.timeIntervalSince(probe.previewTime) < 2
-                    ZStack {
-                        Color.black
-                        if let image = probe.previewImage {
-                            Image(uiImage: image).resizable().scaledToFit()
-                                .rotationEffect(.degrees(previewUpsideDown ? 180 : 0))
-                                .scaleEffect(previewMagnified ? 2 : 1)
+                CameraPreview(session: probe.sensorReady ? probe.session : nil, device: probe.previewDevice)
+                    .aspectRatio(3.0 / 4.0, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay {
+                        if !probe.sensorReady {
+                            Text("Activá TrueDepth para ver la cámara").foregroundStyle(.white)
                         }
-                        Image(systemName: "plus").font(.title).foregroundStyle(.yellow)
-                            .shadow(color: .black, radius: 2)
-                        VStack {
-                            HStack {
-                                Text(fresh ? "Vista en vivo" : "Sin imagen reciente")
-                                    .font(.caption.bold()).padding(6)
-                                    .background(.black.opacity(0.7)).foregroundStyle(fresh ? .white : .yellow)
-                                Spacer()
-                            }
-                            Spacer()
-                            if probe.previewImage == nil {
-                                Text("Activá TrueDepth para ver la cámara")
-                                    .foregroundStyle(.white).font(.callout)
-                            }
-                        }.padding(8)
                     }
-                    .aspectRatio(probe.previewAspect, contentMode: .fit)
-                    .clipped().clipShape(RoundedRectangle(cornerRadius: 12))
-                }
-                HStack {
-                    Toggle("Girar vista 180°", isOn: $previewUpsideDown)
-                    Toggle("Lupa 2×", isOn: $previewMagnified)
-                }.font(.caption)
                 Text(probe.focusStatus).font(.callout)
                 HStack {
                     Button("Enfocar centro") { probe.refocus() }
                     Button("Bloquear foco actual") { probe.lockFocus() }
                 }.disabled(!probe.sensorReady)
-                Text("Poné la cara completa dentro de la imagen y la cruz sobre la madera. Enfocá, revisá los bordes con la lupa y bloqueá. Foco estable no garantiza nitidez.").font(.footnote)
+                Text("Centrá la cara con la cuadrícula, enfocá y revisá que los bordes se vean nítidos antes de bloquear.").font(.footnote)
                 Text(probe.status)
                 Text("IP Wi-Fi: \(Probe.wifiAddress())\nPuerto: 8765")
                 Text("Código: \(probe.token)").font(.system(.title2, design: .monospaced)).textSelection(.enabled)
@@ -74,13 +48,8 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
     @Published var started = false
     @Published var sensorReady = false
     @Published var focusStatus = "Foco: sensor inactivo"
-    @Published var previewImage: UIImage?
-    @Published var previewTime = Date.distantPast
-    @Published var previewAspect: CGFloat = 4.0 / 3.0
-    private let previewQueue = DispatchQueue(label: "truedepth.preview", qos: .userInitiated)
-    private let previewContext = CIContext(options: [.cacheIntermediates: false])
-    private var previewBusy = false
-    private var lastPreviewRequest = Date.distantPast
+    @Published var previewDevice: AVCaptureDevice?
+    private var focusCompletionReceived = false
     private var focusState = "unlocked"
     private var focusGeneration = 0
     private var focusProfileID = UUID().uuidString
@@ -88,7 +57,7 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
     private var lockedPosition: Float?
     let token = UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12).lowercased()
     private let queue = DispatchQueue(label: "truedepth.capture")
-    private let session = AVCaptureSession()
+    let session = AVCaptureSession()
     let transport = ProbeTransport()
     private let latestLock = NSLock()
     private struct Pair {
@@ -111,25 +80,20 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
     private var rejectedPairs = 0
     private let imageContext = CIContext(options: [.cacheIntermediates: false])
 
-    // Called only on capture queue. At most one render in flight, <= 5 Hz.
-    // Display transforms never modify the buffers used for RGB-D packets.
-    private func updatePreview(_ buffer: CVPixelBuffer) {
-        let capturedAt = Date()
-        guard !previewBusy, capturedAt.timeIntervalSince(lastPreviewRequest) >= 0.2 else { return }
-        previewBusy = true
-        lastPreviewRequest = capturedAt
-        previewQueue.async {
-            let input = CIImage(cvPixelBuffer: buffer)
-            if let rendered = self.previewContext.createCGImage(input, from: input.extent) {
-                let image = UIImage(cgImage: rendered)
-                DispatchQueue.main.async {
-                    self.previewImage = image
-                    self.previewAspect = CGFloat(rendered.width) / CGFloat(rendered.height)
-                    self.previewTime = capturedAt
-                }
-            }
-            self.queue.async { self.previewBusy = false }
-        }
+    // Capture-queue only. Completion and observable focus state may settle on
+    // different turns. Wait for both instead of failing inside the callback.
+    private func confirmPendingFocus() {
+        guard focusState == "locking", focusCompletionReceived,
+              let device = captureDevice, device.focusMode == .locked,
+              !device.isAdjustingFocus,
+              let clock = session.synchronizationClock else { return }
+        let boundary = CMClockGetTime(clock)
+        guard boundary.isValid, !boundary.isIndefinite, CMTimeGetSeconds(boundary).isFinite else { return }
+        lockBoundary = boundary
+        lockedPosition = device.lensPosition
+        focusState = "locked"
+        clearPair()
+        focusReport("Foco bloqueado; esperando un par nuevo.")
     }
 
     private func report(_ text: String) { DispatchQueue.main.async { self.status = text } }
@@ -183,30 +147,26 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
                 let generation = self.focusGeneration
                 self.focusProfileID = UUID().uuidString
                 self.focusState = "locking"; self.lockBoundary = nil
+                self.focusCompletionReceived = false
                 self.clearPair()
                 self.focusReport("Esperando confirmación del bloqueo…")
                 // Current position is allowed even without arbitrary-position support.
                 device.setFocusModeLocked(lensPosition: AVCaptureDevice.currentLensPosition) { _ in
                     self.queue.async {
                         guard generation == self.focusGeneration else { return }
-                        // Conservative boundary on the sample clock AFTER completion.
-                        // Never compare the callback's device-clock timestamp directly.
-                        guard let clock = self.session.masterClock,
-                              device.focusMode == .locked, !device.isAdjustingFocus else {
-                            self.focusState = "failed"; self.clearPair()
-                            self.focusReport("No se pudo confirmar foco/reloj. Volvé a bloquear."); return
-                        }
-                        self.lockBoundary = CMClockGetTime(clock)
-                        self.lockedPosition = device.lensPosition
-                        self.focusState = "locked"
-                        self.clearPair()
-                        self.focusReport("Foco bloqueado; esperando un par nuevo.")
+                        self.focusCompletionReceived = true
+                        self.confirmPendingFocus()
                     }
                 }
                 self.queue.asyncAfter(deadline: .now() + 5) {
                     guard generation == self.focusGeneration, self.focusState == "locking" else { return }
                     self.focusGeneration += 1; self.focusState = "failed"; self.clearPair()
-                    self.focusReport("El bloqueo no respondió. Volvé a intentarlo.")
+                    let reason: String
+                    if !self.focusCompletionReceived { reason = "La cámara no confirmó la solicitud de bloqueo." }
+                    else if device.focusMode != .locked { reason = "La cámara no mantuvo el modo de foco bloqueado." }
+                    else if device.isAdjustingFocus { reason = "La lente sigue ajustándose." }
+                    else { reason = "No hay reloj de sincronización válido para verificar las capturas." }
+                    self.focusReport(reason + " Volvé a intentar.")
                 }
             } catch { self.focusState = "failed"; self.clearPair(); self.focusReport("Error de bloqueo: \(error.localizedDescription)") }
         }
@@ -219,7 +179,7 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
             self.queue.async {
                 do {
                     try self.configure(); self.session.startRunning()
-                    DispatchQueue.main.async { self.sensorReady = true }
+                    DispatchQueue.main.async { self.previewDevice = self.captureDevice; self.sensorReady = true }
                     try self.transport.start(token: self.token, packet: { try self.packet(includeRGB: $0) }, report: self.report)
                 }
                 catch { self.report("Error: \(error.localizedDescription). Cerrá y reabrí la app para reintentar.") }
@@ -309,7 +269,7 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
             rejectedPairs += 1
             return
         }
-        updatePreview(rgb)
+        confirmPendingFocus()
         let adjusting = device.isAdjustingFocus
         let position = device.lensPosition
         if focusState == "locked" {
@@ -334,7 +294,7 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
             "video_format_width": videoSize.width, "video_format_height": videoSize.height,
             "video_subtype": CMFormatDescriptionGetMediaSubType(device.activeFormat.formatDescription),
             "zoom_factor": device.videoZoomFactor, "lens_position": device.lensPosition,
-            "app_version": "0.5.0",
+            "app_version": "0.6.0",
             "focus": ["state": focusState, "profile_id": focusProfileID,
                       "mode_raw": device.focusMode.rawValue, "is_adjusting": adjusting,
                       "lens_position": position, "lock_confirmed": focusState == "locked",
@@ -343,6 +303,7 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
                       "supports_continuous_auto": device.isFocusModeSupported(.continuousAutoFocus),
                       "supports_custom_position": device.isLockingFocusWithCustomLensPositionSupported,
                       "observation": "device state at synchronized callback; not exposure metadata",
+                      "confirmation_method": "completion_and_stable_state_then_synchronization_clock",
                       "sample_clock_boundary": lockBoundary.map { self.stamp($0) } as Any? ?? NSNull()] as [String: Any],
             "depth_connection": connectionInfo(depthOutput.connection(with: .depthData)),
             "rgb_connection": connectionInfo(videoOutput.connection(with: .video))]
