@@ -8,22 +8,57 @@ import CoreImage
 @main
 struct ProbeApp: App {
     @StateObject private var probe = Probe()
+    @State private var previewUpsideDown = true
+    @State private var previewMagnified = false
     var body: some Scene {
         WindowGroup {
             ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                Text("TrueDepth · RGB-D v4").font(.title.bold())
-                Text(probe.status)
-                Text("IP Wi-Fi: \(Probe.wifiAddress())\nPuerto: 8765")
-                Text("Código: \(probe.token)").font(.system(.title2, design: .monospaced)).textSelection(.enabled)
-                Text("Mantené esta app abierta. La cámara frontal apunta al objeto. En Windows ejecutá Capturar-RGBD.ps1 con esta IP y código.")
-                ShareLink("Compartir registro de transporte", item: probe.transport.logURL)
+                Text("TrueDepth · RGB-D v5").font(.title.bold())
                 Button("Activar TrueDepth") { probe.start() }.buttonStyle(.borderedProminent).disabled(probe.started)
+                TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                    let fresh = timeline.date.timeIntervalSince(probe.previewTime) < 2
+                    ZStack {
+                        Color.black
+                        if let image = probe.previewImage {
+                            Image(uiImage: image).resizable().scaledToFit()
+                                .rotationEffect(.degrees(previewUpsideDown ? 180 : 0))
+                                .scaleEffect(previewMagnified ? 2 : 1)
+                        }
+                        Image(systemName: "plus").font(.title).foregroundStyle(.yellow)
+                            .shadow(color: .black, radius: 2)
+                        VStack {
+                            HStack {
+                                Text(fresh ? "Vista en vivo" : "Sin imagen reciente")
+                                    .font(.caption.bold()).padding(6)
+                                    .background(.black.opacity(0.7)).foregroundStyle(fresh ? .white : .yellow)
+                                Spacer()
+                            }
+                            Spacer()
+                            if probe.previewImage == nil {
+                                Text("Activá TrueDepth para ver la cámara")
+                                    .foregroundStyle(.white).font(.callout)
+                            }
+                        }.padding(8)
+                    }
+                    .aspectRatio(probe.previewAspect, contentMode: .fit)
+                    .clipped().clipShape(RoundedRectangle(cornerRadius: 12))
+                }
+                HStack {
+                    Toggle("Girar vista 180°", isOn: $previewUpsideDown)
+                    Toggle("Lupa 2×", isOn: $previewMagnified)
+                }.font(.caption)
                 Text(probe.focusStatus).font(.callout)
                 HStack {
                     Button("Enfocar centro") { probe.refocus() }
                     Button("Bloquear foco actual") { probe.lockFocus() }
                 }.disabled(!probe.sensorReady)
+                Text("Poné la cara completa dentro de la imagen y la cruz sobre la madera. Enfocá, revisá los bordes con la lupa y bloqueá. Foco estable no garantiza nitidez.").font(.footnote)
+                Text(probe.status)
+                Text("IP Wi-Fi: \(Probe.wifiAddress())\nPuerto: 8765")
+                Text("Código: \(probe.token)").font(.system(.title2, design: .monospaced)).textSelection(.enabled)
+                Text("Mantené esta app abierta. La cámara frontal apunta al objeto. En Windows ejecutá Capturar-RGBD.ps1 con esta IP y código.")
+                ShareLink("Compartir registro de transporte", item: probe.transport.logURL)
                 Text("Para calibrar: apuntá al tablero, enfocá, esperá y bloqueá. Conservá ese bloqueo para medir.").font(.footnote)
                 Text("RGB y profundidad sincronizados. Sin tracking ni reconstrucción.").font(.footnote)
             }.padding(26).onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
@@ -39,6 +74,13 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
     @Published var started = false
     @Published var sensorReady = false
     @Published var focusStatus = "Foco: sensor inactivo"
+    @Published var previewImage: UIImage?
+    @Published var previewTime = Date.distantPast
+    @Published var previewAspect: CGFloat = 4.0 / 3.0
+    private let previewQueue = DispatchQueue(label: "truedepth.preview", qos: .userInitiated)
+    private let previewContext = CIContext(options: [.cacheIntermediates: false])
+    private var previewBusy = false
+    private var lastPreviewRequest = Date.distantPast
     private var focusState = "unlocked"
     private var focusGeneration = 0
     private var focusProfileID = UUID().uuidString
@@ -68,6 +110,27 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
     private var captureDevice: AVCaptureDevice?
     private var rejectedPairs = 0
     private let imageContext = CIContext(options: [.cacheIntermediates: false])
+
+    // Called only on capture queue. At most one render in flight, <= 5 Hz.
+    // Display transforms never modify the buffers used for RGB-D packets.
+    private func updatePreview(_ buffer: CVPixelBuffer) {
+        let capturedAt = Date()
+        guard !previewBusy, capturedAt.timeIntervalSince(lastPreviewRequest) >= 0.2 else { return }
+        previewBusy = true
+        lastPreviewRequest = capturedAt
+        previewQueue.async {
+            let input = CIImage(cvPixelBuffer: buffer)
+            if let rendered = self.previewContext.createCGImage(input, from: input.extent) {
+                let image = UIImage(cgImage: rendered)
+                DispatchQueue.main.async {
+                    self.previewImage = image
+                    self.previewAspect = CGFloat(rendered.width) / CGFloat(rendered.height)
+                    self.previewTime = capturedAt
+                }
+            }
+            self.queue.async { self.previewBusy = false }
+        }
+    }
 
     private func report(_ text: String) { DispatchQueue.main.async { self.status = text } }
     private func focusReport(_ text: String) { DispatchQueue.main.async { self.focusStatus = text } }
@@ -246,6 +309,7 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
             rejectedPairs += 1
             return
         }
+        updatePreview(rgb)
         let adjusting = device.isAdjustingFocus
         let position = device.lensPosition
         if focusState == "locked" {
@@ -270,7 +334,7 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
             "video_format_width": videoSize.width, "video_format_height": videoSize.height,
             "video_subtype": CMFormatDescriptionGetMediaSubType(device.activeFormat.formatDescription),
             "zoom_factor": device.videoZoomFactor, "lens_position": device.lensPosition,
-            "app_version": "0.4.0",
+            "app_version": "0.5.0",
             "focus": ["state": focusState, "profile_id": focusProfileID,
                       "mode_raw": device.focusMode.rawValue, "is_adjusting": adjusting,
                       "lens_position": position, "lock_confirmed": focusState == "locked",
