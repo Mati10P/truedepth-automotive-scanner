@@ -10,16 +10,26 @@ struct ProbeApp: App {
     @StateObject private var probe = Probe()
     var body: some Scene {
         WindowGroup {
+            ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                Text("TrueDepth · RGB-D v3").font(.title.bold())
+                Text("TrueDepth · RGB-D v4").font(.title.bold())
                 Text(probe.status)
                 Text("IP Wi-Fi: \(Probe.wifiAddress())\nPuerto: 8765")
                 Text("Código: \(probe.token)").font(.system(.title2, design: .monospaced)).textSelection(.enabled)
-                Text("Mantené esta app abierta. La cámara frontal apunta al objeto. En Windows ejecutá Capturar-secuencia.ps1 con esta IP y código.")
+                Text("Mantené esta app abierta. La cámara frontal apunta al objeto. En Windows ejecutá Capturar-RGBD.ps1 con esta IP y código.")
                 ShareLink("Compartir registro de transporte", item: probe.transport.logURL)
                 Button("Activar TrueDepth") { probe.start() }.buttonStyle(.borderedProminent).disabled(probe.started)
+                Text(probe.focusStatus).font(.callout)
+                HStack {
+                    Button("Enfocar centro") { probe.refocus() }
+                    Button("Bloquear foco actual") { probe.lockFocus() }
+                }.disabled(!probe.sensorReady)
+                Text("Para calibrar: apuntá al tablero, enfocá, esperá y bloqueá. Conservá ese bloqueo para medir.").font(.footnote)
                 Text("RGB y profundidad sincronizados. Sin tracking ni reconstrucción.").font(.footnote)
-            }.padding(26)
+            }.padding(26).onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+                probe.invalidateFocus()
+            }
+            }
         }
     }
 }
@@ -27,6 +37,13 @@ struct ProbeApp: App {
 final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDelegate {
     @Published var status = "Sensor todavía inactivo"
     @Published var started = false
+    @Published var sensorReady = false
+    @Published var focusStatus = "Foco: sensor inactivo"
+    private var focusState = "unlocked"
+    private var focusGeneration = 0
+    private var focusProfileID = UUID().uuidString
+    private var lockBoundary: CMTime?
+    private var lockedPosition: Float?
     let token = UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12).lowercased()
     private let queue = DispatchQueue(label: "truedepth.capture")
     private let session = AVCaptureSession()
@@ -53,6 +70,84 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
     private let imageContext = CIContext(options: [.cacheIntermediates: false])
 
     private func report(_ text: String) { DispatchQueue.main.async { self.status = text } }
+    private func focusReport(_ text: String) { DispatchQueue.main.async { self.focusStatus = text } }
+    private func clearPair() {
+        latestLock.lock(); latest = nil; latestLock.unlock()
+    }
+    func invalidateFocus() {
+        queue.async {
+            self.focusGeneration += 1
+            self.focusState = "invalidated"
+            self.lockBoundary = nil
+            self.clearPair()
+            self.focusReport("Foco invalidado al salir de la app. Volvé a enfocar y bloquear.")
+        }
+    }
+    func refocus() {
+        queue.async {
+            guard let device = self.captureDevice else { return }
+            guard device.isFocusModeSupported(.autoFocus) else {
+                self.focusReport("Este formato no admite autofocus puntual."); return
+            }
+            do {
+                try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
+                self.focusGeneration += 1
+                self.focusProfileID = UUID().uuidString
+                self.focusState = "unlocked"
+                self.lockBoundary = nil; self.lockedPosition = nil
+                self.clearPair()
+                if device.isFocusPointOfInterestSupported { device.focusPointOfInterest = CGPoint(x: 0.5, y: 0.5) }
+                device.focusMode = .autoFocus
+                self.focusReport("Enfocando el centro; esperá antes de bloquear.")
+            } catch { self.focusReport("No se pudo enfocar: \(error.localizedDescription)") }
+        }
+    }
+    func lockFocus() {
+        queue.async {
+            guard let device = self.captureDevice else { return }
+            guard device.isFocusModeSupported(.locked) else {
+                self.focusState = "unsupported"; self.clearPair()
+                self.focusReport("Bloqueo de foco no disponible en este formato."); return
+            }
+            guard !device.isAdjustingFocus else {
+                self.focusReport("El foco sigue ajustándose; esperá y volvé a bloquear."); return
+            }
+            do {
+                try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
+                self.focusGeneration += 1
+                let generation = self.focusGeneration
+                self.focusProfileID = UUID().uuidString
+                self.focusState = "locking"; self.lockBoundary = nil
+                self.clearPair()
+                self.focusReport("Esperando confirmación del bloqueo…")
+                // Current position is allowed even without arbitrary-position support.
+                device.setFocusModeLocked(lensPosition: AVCaptureDevice.currentLensPosition) { _ in
+                    self.queue.async {
+                        guard generation == self.focusGeneration else { return }
+                        // Conservative boundary on the sample clock AFTER completion.
+                        // Never compare the callback's device-clock timestamp directly.
+                        guard let clock = self.session.masterClock,
+                              device.focusMode == .locked, !device.isAdjustingFocus else {
+                            self.focusState = "failed"; self.clearPair()
+                            self.focusReport("No se pudo confirmar foco/reloj. Volvé a bloquear."); return
+                        }
+                        self.lockBoundary = CMClockGetTime(clock)
+                        self.lockedPosition = device.lensPosition
+                        self.focusState = "locked"
+                        self.clearPair()
+                        self.focusReport("Foco bloqueado; esperando un par nuevo.")
+                    }
+                }
+                self.queue.asyncAfter(deadline: .now() + 5) {
+                    guard generation == self.focusGeneration, self.focusState == "locking" else { return }
+                    self.focusGeneration += 1; self.focusState = "failed"; self.clearPair()
+                    self.focusReport("El bloqueo no respondió. Volvé a intentarlo.")
+                }
+            } catch { self.focusState = "failed"; self.clearPair(); self.focusReport("Error de bloqueo: \(error.localizedDescription)") }
+        }
+    }
     func start() {
         started = true
         UIApplication.shared.isIdleTimerDisabled = true
@@ -61,6 +156,7 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
             self.queue.async {
                 do {
                     try self.configure(); self.session.startRunning()
+                    DispatchQueue.main.async { self.sensorReady = true }
                     try self.transport.start(token: self.token, packet: { try self.packet(includeRGB: $0) }, report: self.report)
                 }
                 catch { self.report("Error: \(error.localizedDescription). Cerrá y reabrí la app para reintentar.") }
@@ -150,11 +246,40 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
             rejectedPairs += 1
             return
         }
+        let adjusting = device.isAdjustingFocus
+        let position = device.lensPosition
+        if focusState == "locked" {
+            guard device.focusMode == .locked, !adjusting,
+                  let expected = lockedPosition, abs(position - expected) < 0.0001 else {
+                focusState = "invalidated"; clearPair()
+                focusReport("El foco cambió: bloqueo invalidado. Volvé a bloquear.")
+                rejectedPairs += 1; return
+            }
+            guard let boundary = lockBoundary,
+                  CMTimeCompare(rgbTime, boundary) > 0, CMTimeCompare(d.timestamp, boundary) > 0 else {
+                rejectedPairs += 1; return
+            }
+        } else if focusState != "unlocked" && focusState != "unsupported" {
+            clearPair(); rejectedPairs += 1; return
+        }
+        if sequence % 15 == 0 {
+            focusReport("\(focusState == "locked" ? "Foco bloqueado" : "Foco sin bloqueo confirmado") · \(adjusting ? "ajustando" : "estable") · lente \(String(format: "%.6f", position))")
+        }
         let videoSize = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
         var settings: [String: Any] = [
             "video_format_width": videoSize.width, "video_format_height": videoSize.height,
             "video_subtype": CMFormatDescriptionGetMediaSubType(device.activeFormat.formatDescription),
             "zoom_factor": device.videoZoomFactor, "lens_position": device.lensPosition,
+            "app_version": "0.4.0",
+            "focus": ["state": focusState, "profile_id": focusProfileID,
+                      "mode_raw": device.focusMode.rawValue, "is_adjusting": adjusting,
+                      "lens_position": position, "lock_confirmed": focusState == "locked",
+                      "supports_locked": device.isFocusModeSupported(.locked),
+                      "supports_auto": device.isFocusModeSupported(.autoFocus),
+                      "supports_continuous_auto": device.isFocusModeSupported(.continuousAutoFocus),
+                      "supports_custom_position": device.isLockingFocusWithCustomLensPositionSupported,
+                      "observation": "device state at synchronized callback; not exposure metadata",
+                      "sample_clock_boundary": lockBoundary.map { self.stamp($0) } as Any? ?? NSNull()] as [String: Any],
             "depth_connection": connectionInfo(depthOutput.connection(with: .depthData)),
             "rgb_connection": connectionInfo(videoOutput.connection(with: .video))]
         if let format = device.activeDepthDataFormat {
