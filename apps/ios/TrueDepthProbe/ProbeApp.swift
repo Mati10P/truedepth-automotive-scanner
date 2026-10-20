@@ -12,7 +12,7 @@ struct ProbeApp: App {
         WindowGroup {
             ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                Text("TrueDepth · RGB-D v7 · 1080p").font(.title.bold())
+                Text("TrueDepth · RGB-D v8 · 4:3").font(.title.bold())
                 Button("Activar TrueDepth") { probe.start() }.buttonStyle(.borderedProminent).disabled(probe.started)
                 CameraPreview(session: probe.sensorReady ? probe.session : nil, device: probe.previewDevice)
                     .aspectRatio(3.0 / 4.0, contentMode: .fit)
@@ -197,13 +197,17 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
             return d.width * d.height
         }
         // Exact requested RGB format; never silently fall back or upscale.
-        let fullHD = candidates.filter {
+        let rgbFormats = candidates.filter {
             let size = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
-            return size.width == 1920 && size.height == 1080
+            return size.width == 1440 && size.height == 1080 &&
+                $0.supportedDepthDataFormats.contains { format in
+                    let depthSize = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+                    return depthSize.width == 640 && depthSize.height == 480
+                }
         }
-        guard let video = fullHD.first,
+        guard let video = rgbFormats.first,
               let depth = video.supportedDepthDataFormats.max(by: { area($0) < area($1) }) else {
-            throw NSError(domain: "TrueDepth", code: 2, userInfo: [NSLocalizedDescriptionKey: "No hay formato RGB 1920 × 1080 compatible con profundidad"])
+            throw NSError(domain: "TrueDepth", code: 2, userInfo: [NSLocalizedDescriptionKey: "No hay formato RGB 1440 × 1080 compatible con profundidad"])
         }
         formats = candidates.map { f in
             let d = CMVideoFormatDescriptionGetDimensions(f.formatDescription)
@@ -276,9 +280,11 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
             rejectedPairs += 1
             return
         }
-        guard CVPixelBufferGetWidth(rgb) == 1920, CVPixelBufferGetHeight(rgb) == 1080 else {
+        let depthBuffer = d.depthData.depthDataMap
+        guard CVPixelBufferGetWidth(rgb) == 1440, CVPixelBufferGetHeight(rgb) == 1080,
+              CVPixelBufferGetWidth(depthBuffer) == 640, CVPixelBufferGetHeight(depthBuffer) == 480 else {
             clearPair(); rejectedPairs += 1
-            if sequence % 30 == 0 { report("La cámara no entregó 1920 × 1080; captura rechazada.") }
+            if sequence % 30 == 0 { report("La cámara no entregó RGB 1440 × 1080 y depth 640 × 480; captura rechazada.") }
             return
         }
         confirmPendingFocus()
@@ -306,8 +312,8 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
             "video_format_width": videoSize.width, "video_format_height": videoSize.height,
             "video_subtype": CMFormatDescriptionGetMediaSubType(device.activeFormat.formatDescription),
             "zoom_factor": device.videoZoomFactor, "lens_position": device.lensPosition,
-            "app_version": "0.7.0",
-            "resolution_policy": "native-rgb-1920x1080-max-compatible-depth",
+            "app_version": "0.8.0",
+            "resolution_policy": "native-rgb-1440x1080-depth-640x480",
             "rgb_buffer_width": CVPixelBufferGetWidth(rgb),
             "rgb_buffer_height": CVPixelBufferGetHeight(rgb),
             "automatically_configures_output_dimensions": videoOutput.automaticallyConfiguresOutputBufferDimensions,
@@ -337,7 +343,7 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
         latestLock.unlock()
         if first {
             let depthBuffer = d.depthData.depthDataMap
-            report("RGB 1920 × 1080 · depth \(CVPixelBufferGetWidth(depthBuffer)) × \(CVPixelBufferGetHeight(depthBuffer)). Sincronizados; listo para Windows.")
+            report("RGB 1440 × 1080 · depth \(CVPixelBufferGetWidth(depthBuffer)) × \(CVPixelBufferGetHeight(depthBuffer)). Sincronizados; listo para Windows.")
         }
     }
     private func packet(includeRGB: Bool) throws -> Data {

@@ -47,6 +47,22 @@ def packet(header,depth,rgb):
 
 
 class RGBDTests(unittest.TestCase):
+    def test_native_rgb_with_smaller_depth(self):
+        from PIL import Image
+        for width,height,dw,dh in [(1920,1080,640,360),(1440,1080,640,480)]:
+            with self.subTest(rgb=(width,height),depth=(dw,dh)):
+                h,_,_=fixture()
+                h['width'],h['height']=dw,dh
+                image=Image.new('RGB',(width,height),(40,120,200))
+                encoded=io.BytesIO();image.save(encoded,format='PNG');data=encoded.getvalue()
+                h['rgb'].update(width=width,height=height,payload_bytes=len(data),
+                                sha256=hashlib.sha256(data).hexdigest(),resized=False)
+                received=read_rgb(Source(data),h)
+                self.assertEqual(received,data)
+                self.assertEqual(Image.open(io.BytesIO(received)).size,(width,height))
+                h['rgb']['width']=dw
+                with self.assertRaisesRegex(ValueError,'PNG'):read_rgb(Source(data),h)
+
     def test_capture_saves_both_channels_and_pair_metadata(self):
         h,d,c=fixture()
         class Transport:
