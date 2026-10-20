@@ -12,7 +12,7 @@ struct ProbeApp: App {
         WindowGroup {
             ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                Text("TrueDepth · RGB-D v6").font(.title.bold())
+                Text("TrueDepth · RGB-D v7 · 1080p").font(.title.bold())
                 Button("Activar TrueDepth") { probe.start() }.buttonStyle(.borderedProminent).disabled(probe.started)
                 CameraPreview(session: probe.sensorReady ? probe.session : nil, device: probe.previewDevice)
                     .aspectRatio(3.0 / 4.0, contentMode: .fit)
@@ -196,9 +196,14 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
             let d = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
             return d.width * d.height
         }
-        guard let video = candidates.min(by: { area($0) < area($1) }),
+        // Exact requested RGB format; never silently fall back or upscale.
+        let fullHD = candidates.filter {
+            let size = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
+            return size.width == 1920 && size.height == 1080
+        }
+        guard let video = fullHD.first,
               let depth = video.supportedDepthDataFormats.max(by: { area($0) < area($1) }) else {
-            throw NSError(domain: "TrueDepth", code: 2, userInfo: [NSLocalizedDescriptionKey: "Sin formato de profundidad"])
+            throw NSError(domain: "TrueDepth", code: 2, userInfo: [NSLocalizedDescriptionKey: "No hay formato RGB 1920 × 1080 compatible con profundidad"])
         }
         formats = candidates.map { f in
             let d = CMVideoFormatDescriptionGetDimensions(f.formatDescription)
@@ -225,6 +230,8 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
         output.alwaysDiscardsLateDepthData = true
         guard session.canAddOutput(output) else { throw failure("No se puede agregar salida depth") }
         session.addOutput(output)
+        videoOutput.automaticallyConfiguresOutputBufferDimensions = false
+        videoOutput.deliversPreviewSizedOutputBuffers = false
         videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
         videoOutput.alwaysDiscardsLateVideoFrames = true
         guard session.canAddOutput(videoOutput) else { throw failure("No se puede agregar salida RGB") }
@@ -269,6 +276,11 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
             rejectedPairs += 1
             return
         }
+        guard CVPixelBufferGetWidth(rgb) == 1920, CVPixelBufferGetHeight(rgb) == 1080 else {
+            clearPair(); rejectedPairs += 1
+            if sequence % 30 == 0 { report("La cámara no entregó 1920 × 1080; captura rechazada.") }
+            return
+        }
         confirmPendingFocus()
         let adjusting = device.isAdjustingFocus
         let position = device.lensPosition
@@ -294,7 +306,12 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
             "video_format_width": videoSize.width, "video_format_height": videoSize.height,
             "video_subtype": CMFormatDescriptionGetMediaSubType(device.activeFormat.formatDescription),
             "zoom_factor": device.videoZoomFactor, "lens_position": device.lensPosition,
-            "app_version": "0.6.0",
+            "app_version": "0.7.0",
+            "resolution_policy": "native-rgb-1920x1080-max-compatible-depth",
+            "rgb_buffer_width": CVPixelBufferGetWidth(rgb),
+            "rgb_buffer_height": CVPixelBufferGetHeight(rgb),
+            "automatically_configures_output_dimensions": videoOutput.automaticallyConfiguresOutputBufferDimensions,
+            "preview_sized_output_buffers": videoOutput.deliversPreviewSizedOutputBuffers,
             "focus": ["state": focusState, "profile_id": focusProfileID,
                       "mode_raw": device.focusMode.rawValue, "is_adjusting": adjusting,
                       "lens_position": position, "lock_confirmed": focusState == "locked",
@@ -318,7 +335,10 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
         latest = Pair(depth: d.depthData, rgb: rgb, depthTime: d.timestamp, rgbTime: rgbTime,
                       arrival: Date(), id: sequence, settings: settings, rejected: rejectedPairs)
         latestLock.unlock()
-        if first { report("RGB-D sincronizado activo. Esperando solicitud de Windows.") }
+        if first {
+            let depthBuffer = d.depthData.depthDataMap
+            report("RGB 1920 × 1080 · depth \(CVPixelBufferGetWidth(depthBuffer)) × \(CVPixelBufferGetHeight(depthBuffer)). Sincronizados; listo para Windows.")
+        }
     }
     private func packet(includeRGB: Bool) throws -> Data {
         latestLock.lock()
