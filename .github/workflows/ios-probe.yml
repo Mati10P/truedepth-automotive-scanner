@@ -17,7 +17,14 @@ jobs:
           xcodegen --version
           cd apps/ios
           xcodegen generate
-          xcodebuild -project TrueDepthProbe.xcodeproj -scheme TrueDepthProbe -configuration Release -sdk iphoneos -derivedDataPath ../../build CODE_SIGNING_ALLOWED=NO build
+          # A fresh runner can lose XCBBuildService on its first invocation.
+          for attempt in 1 2 3; do
+            if xcodebuild -project TrueDepthProbe.xcodeproj -scheme TrueDepthProbe -configuration Release -sdk iphoneos -derivedDataPath ../../build -jobs 1 CODE_SIGNING_ALLOWED=NO build; then
+              exit 0
+            fi
+            sleep 3
+          done
+          exit 1
       - name: Package unsigned IPA
         run: |
           mkdir -p dist/Payload
