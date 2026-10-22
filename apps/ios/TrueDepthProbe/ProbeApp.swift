@@ -8,18 +8,48 @@ import CoreImage
 @main
 struct ProbeApp: App {
     @StateObject private var probe = Probe()
+    @State private var manualPosition = "0.56078434"
     var body: some Scene {
         WindowGroup {
+            ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                Text("TrueDepth · RGB-D v3").font(.title.bold())
+                Text("TrueDepth · RGB-D v10 · 4:3").font(.title.bold())
+                Button("Activar TrueDepth") { probe.start() }.buttonStyle(.borderedProminent).disabled(probe.started)
+                CameraPreview(session: probe.sensorReady ? probe.session : nil, device: probe.previewDevice)
+                    .aspectRatio(3.0 / 4.0, contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay {
+                        if !probe.sensorReady {
+                            Text("Activá TrueDepth para ver la cámara").foregroundStyle(.white)
+                        }
+                    }
+                Text(probe.focusStatus).font(.callout)
+                HStack {
+                    Button("Enfocar centro") { probe.refocus() }
+                    Button("Bloquear foco actual") { probe.lockFocus() }
+                }.disabled(!probe.sensorReady)
+                Text("Centrá la cara con la cuadrícula, enfocá y revisá que los bordes se vean nítidos antes de bloquear.").font(.footnote)
+                HStack {
+                    TextField("Posicion 0-1", text: $manualPosition).keyboardType(.decimalPad)
+                    Button("Fijar manual") {
+                        if let value = Float(manualPosition.replacingOccurrences(of: ",", with: ".")) {
+                            probe.lockFocus(position: value)
+                        }
+                    }
+                }.disabled(!probe.sensorReady)
                 Text(probe.status)
                 Text("IP Wi-Fi: \(Probe.wifiAddress())\nPuerto: 8765")
                 Text("Código: \(probe.token)").font(.system(.title2, design: .monospaced)).textSelection(.enabled)
-                Text("Mantené esta app abierta. La cámara frontal apunta al objeto. En Windows ejecutá Capturar-secuencia.ps1 con esta IP y código.")
+                Text("Mantené esta app abierta. La cámara frontal apunta al objeto. En Windows ejecutá Capturar-RGBD.ps1 con esta IP y código.")
                 ShareLink("Compartir registro de transporte", item: probe.transport.logURL)
-                Button("Activar TrueDepth") { probe.start() }.buttonStyle(.borderedProminent).disabled(probe.started)
+                Text("Para calibrar: apuntá al tablero, enfocá, esperá y bloqueá. Conservá ese bloqueo para medir.").font(.footnote)
                 Text("RGB y profundidad sincronizados. Sin tracking ni reconstrucción.").font(.footnote)
-            }.padding(26)
+            }.padding(26).onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+                probe.invalidateFocus()
+            }.onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                probe.restoreManualFocus()
+            }
+            }
         }
     }
 }
@@ -27,9 +57,21 @@ struct ProbeApp: App {
 final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDelegate {
     @Published var status = "Sensor todavía inactivo"
     @Published var started = false
+    @Published var sensorReady = false
+    @Published var focusStatus = "Foco: sensor inactivo"
+    @Published var previewDevice: AVCaptureDevice?
+    private var focusCompletionReceived = false
+    private var focusState = "unlocked"
+    private var focusGeneration = 0
+    private var focusProfileID = UUID().uuidString
+    private var lockBoundary: CMTime?
+    private var lockedPosition: Float?
+    private var requestedPosition: Float?
+    private var stableCandidate: Float?
+    private var stableSince: TimeInterval?
     let token = UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(12).lowercased()
     private let queue = DispatchQueue(label: "truedepth.capture")
-    private let session = AVCaptureSession()
+    let session = AVCaptureSession()
     let transport = ProbeTransport()
     private let latestLock = NSLock()
     private struct Pair {
@@ -52,7 +94,148 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
     private var rejectedPairs = 0
     private let imageContext = CIContext(options: [.cacheIntermediates: false])
 
+    // Capture-queue only. Completion and observable focus state may settle on
+    // different turns. Wait for both instead of failing inside the callback.
+    private func confirmPendingFocus() {
+        guard focusState == "locking" else { return }
+        guard focusCompletionReceived,
+              let device = captureDevice, device.focusMode == .locked,
+              !device.isAdjustingFocus,
+              let clock = session.synchronizationClock else {
+            stableCandidate = nil; stableSince = nil; return
+        }
+        let actual = device.lensPosition
+        guard actual.isFinite, (0...1).contains(actual) else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard let candidate = stableCandidate, let since = stableSince,
+              abs(actual - candidate) < 0.0001 else {
+            stableCandidate = actual; stableSince = now; return
+        }
+        guard now - since >= 0.5 else { return }
+        let boundary = CMClockGetTime(clock)
+        guard boundary.isValid, !boundary.isIndefinite, CMTimeGetSeconds(boundary).isFinite else { return }
+        lockBoundary = boundary
+        lockedPosition = device.lensPosition
+        focusState = "locked"
+        clearPair()
+        focusReport("Foco bloqueado; esperando un par nuevo.")
+    }
+
     private func report(_ text: String) { DispatchQueue.main.async { self.status = text } }
+    private func focusReport(_ text: String) { DispatchQueue.main.async { self.focusStatus = text } }
+    private func clearPair() {
+        latestLock.lock(); latest = nil; latestLock.unlock()
+    }
+    func invalidateFocus() {
+        queue.async {
+            self.focusGeneration += 1
+            self.focusState = "invalidated"
+            self.lockBoundary = nil
+            self.clearPair()
+            self.focusReport("Foco invalidado al salir de la app. Volvé a enfocar y bloquear.")
+        }
+    }
+    func refocus() {
+        queue.async {
+            guard let device = self.captureDevice else { return }
+            guard device.isFocusModeSupported(.autoFocus) else {
+                self.focusReport("Este formato no admite autofocus puntual."); return
+            }
+            do {
+                try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
+                self.focusGeneration += 1
+                self.focusProfileID = UUID().uuidString
+                UserDefaults.standard.removeObject(forKey: "manualLensPosition")
+                self.requestedPosition = nil
+                self.focusState = "unlocked"
+                self.lockBoundary = nil; self.lockedPosition = nil
+                self.clearPair()
+                if device.isFocusPointOfInterestSupported { device.focusPointOfInterest = CGPoint(x: 0.5, y: 0.5) }
+                device.focusMode = .autoFocus
+                self.focusReport("Enfocando el centro; esperá antes de bloquear.")
+            } catch { self.focusReport("No se pudo enfocar: \(error.localizedDescription)") }
+        }
+    }
+    func lockFocus(position: Float? = nil) {
+        queue.async {
+            guard let device = self.captureDevice else { return }
+            if let position = position {
+                guard position.isFinite, (0...1).contains(position), device.isLockingFocusWithCustomLensPositionSupported else {
+                    self.focusReport("Posición manual inválida o no compatible."); return
+                }
+            }
+            guard device.isFocusModeSupported(.locked) else {
+                self.focusState = "unsupported"; self.clearPair()
+                self.focusReport("Bloqueo de foco no disponible en este formato."); return
+            }
+            guard !device.isAdjustingFocus else {
+                self.focusReport("El foco sigue ajustándose; esperá y volvé a bloquear."); return
+            }
+            do {
+                try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
+                self.focusGeneration += 1
+                let generation = self.focusGeneration
+                self.focusProfileID = UUID().uuidString
+                self.requestedPosition = position
+                if let position = position { UserDefaults.standard.set(position, forKey: "manualLensPosition") }
+                else { UserDefaults.standard.removeObject(forKey: "manualLensPosition") }
+                self.focusState = "locking"; self.lockBoundary = nil
+                self.focusCompletionReceived = false
+                self.stableCandidate = nil; self.stableSince = nil
+                self.clearPair()
+                self.focusReport("Esperando confirmación del bloqueo…")
+                // Current position is allowed even without arbitrary-position support.
+                device.setFocusModeLocked(lensPosition: position ?? AVCaptureDevice.currentLensPosition) { _ in
+                    self.queue.async {
+                        guard generation == self.focusGeneration else { return }
+                        self.focusCompletionReceived = true
+                        self.confirmPendingFocus()
+                    }
+                }
+                self.queue.asyncAfter(deadline: .now() + 5) {
+                    guard generation == self.focusGeneration, self.focusState == "locking" else { return }
+                    self.focusGeneration += 1; self.focusState = "failed"; self.clearPair()
+                    let reason: String
+                    if !self.focusCompletionReceived { reason = "La cámara no confirmó la solicitud de bloqueo." }
+                    else if device.focusMode != .locked { reason = "La cámara no mantuvo el modo de foco bloqueado." }
+                    else if device.isAdjustingFocus { reason = "La lente sigue ajustándose." }
+                    else { reason = "No hay reloj de sincronización válido para verificar las capturas." }
+                    self.focusReport(reason + " Volvé a intentar.")
+                }
+            } catch { self.focusState = "failed"; self.clearPair(); self.focusReport("Error de bloqueo: \(error.localizedDescription)") }
+        }
+    }
+    func restoreManualFocus() {
+        if let value = UserDefaults.standard.object(forKey: "manualLensPosition") as? NSNumber {
+            lockFocus(position: value.floatValue)
+        }
+    }
+
+    // Called only from transport preparation queue. All camera state stays on capture queue.
+    func focusControl(_ command: String) -> [String: Any] {
+        if command != "status" {
+            guard command.hasPrefix("set:"), let value = Float(command.dropFirst(4)),
+                  value.isFinite, (0...1).contains(value) else {
+                return ["ok": false, "error": "Use status or set:<finite position 0..1>"]
+            }
+            let supported = queue.sync { captureDevice?.isLockingFocusWithCustomLensPositionSupported == true }
+            guard supported else { return ["ok": false, "error": "Custom lens position unavailable"] }
+            lockFocus(position: value)
+        }
+        return queue.sync {
+            guard let device = captureDevice else { return ["ok": false, "error": "Camera inactive"] }
+            return ["ok": true, "state": focusState, "profile_id": focusProfileID,
+                    "lens_position": device.lensPosition, "is_adjusting": device.isAdjustingFocus,
+                    "lock_confirmed": focusState == "locked" && device.focusMode == .locked && !device.isAdjustingFocus
+                        && lockedPosition.map { abs(device.lensPosition - $0) < 0.0001 } == true,
+                    "requested_position": requestedPosition.map { $0 as Any } ?? NSNull(),
+                    "position_error": requestedPosition.map { (device.lensPosition - $0) as Any } ?? NSNull(),
+                    "stability_window_seconds": 0.5]
+        }
+    }
+
     func start() {
         started = true
         UIApplication.shared.isIdleTimerDisabled = true
@@ -61,7 +244,9 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
             self.queue.async {
                 do {
                     try self.configure(); self.session.startRunning()
-                    try self.transport.start(token: self.token, packet: { try self.packet(includeRGB: $0) }, report: self.report)
+                    self.restoreManualFocus()
+                    DispatchQueue.main.async { self.previewDevice = self.captureDevice; self.sensorReady = true }
+                    try self.transport.start(token: self.token, control: self.focusControl, packet: { try self.packet(includeRGB: $0) }, report: self.report)
                 }
                 catch { self.report("Error: \(error.localizedDescription). Cerrá y reabrí la app para reintentar.") }
             }
@@ -77,9 +262,18 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
             let d = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
             return d.width * d.height
         }
-        guard let video = candidates.min(by: { area($0) < area($1) }),
+        // Exact requested RGB format; never silently fall back or upscale.
+        let rgbFormats = candidates.filter {
+            let size = CMVideoFormatDescriptionGetDimensions($0.formatDescription)
+            return size.width == 1440 && size.height == 1080 &&
+                $0.supportedDepthDataFormats.contains { format in
+                    let depthSize = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+                    return depthSize.width == 640 && depthSize.height == 480
+                }
+        }
+        guard let video = rgbFormats.first,
               let depth = video.supportedDepthDataFormats.max(by: { area($0) < area($1) }) else {
-            throw NSError(domain: "TrueDepth", code: 2, userInfo: [NSLocalizedDescriptionKey: "Sin formato de profundidad"])
+            throw NSError(domain: "TrueDepth", code: 2, userInfo: [NSLocalizedDescriptionKey: "No hay formato RGB 1440 × 1080 compatible con profundidad"])
         }
         formats = candidates.map { f in
             let d = CMVideoFormatDescriptionGetDimensions(f.formatDescription)
@@ -106,6 +300,8 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
         output.alwaysDiscardsLateDepthData = true
         guard session.canAddOutput(output) else { throw failure("No se puede agregar salida depth") }
         session.addOutput(output)
+        videoOutput.automaticallyConfiguresOutputBufferDimensions = false
+        videoOutput.deliversPreviewSizedOutputBuffers = false
         videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
         videoOutput.alwaysDiscardsLateVideoFrames = true
         guard session.canAddOutput(videoOutput) else { throw failure("No se puede agregar salida RGB") }
@@ -150,11 +346,55 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
             rejectedPairs += 1
             return
         }
+        let depthBuffer = d.depthData.depthDataMap
+        guard CVPixelBufferGetWidth(rgb) == 1440, CVPixelBufferGetHeight(rgb) == 1080,
+              CVPixelBufferGetWidth(depthBuffer) == 640, CVPixelBufferGetHeight(depthBuffer) == 480 else {
+            clearPair(); rejectedPairs += 1
+            if sequence % 30 == 0 { report("La cámara no entregó RGB 1440 × 1080 y depth 640 × 480; captura rechazada.") }
+            return
+        }
+        confirmPendingFocus()
+        let adjusting = device.isAdjustingFocus
+        let position = device.lensPosition
+        if focusState == "locked" {
+            guard device.focusMode == .locked, !adjusting,
+                  let expected = lockedPosition, abs(position - expected) < 0.0001 else {
+                focusState = "invalidated"; clearPair()
+                focusReport("El foco cambió: bloqueo invalidado. Volvé a bloquear.")
+                rejectedPairs += 1; return
+            }
+            guard let boundary = lockBoundary,
+                  CMTimeCompare(rgbTime, boundary) > 0, CMTimeCompare(d.timestamp, boundary) > 0 else {
+                rejectedPairs += 1; return
+            }
+        } else if focusState != "unlocked" && focusState != "unsupported" {
+            clearPair(); rejectedPairs += 1; return
+        }
+        if sequence % 15 == 0 {
+            focusReport("\(focusState == "locked" ? "Foco bloqueado" : "Foco sin bloqueo confirmado") · \(adjusting ? "ajustando" : "estable") · real \(String(format: "%.9f", position)) � solicitado \(requestedPosition.map { String(format: "%.9f", $0) } ?? "actual")")
+        }
         let videoSize = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
         var settings: [String: Any] = [
             "video_format_width": videoSize.width, "video_format_height": videoSize.height,
             "video_subtype": CMFormatDescriptionGetMediaSubType(device.activeFormat.formatDescription),
             "zoom_factor": device.videoZoomFactor, "lens_position": device.lensPosition,
+            "app_version": "0.10.0",
+            "resolution_policy": "native-rgb-1440x1080-depth-640x480",
+            "rgb_buffer_width": CVPixelBufferGetWidth(rgb),
+            "rgb_buffer_height": CVPixelBufferGetHeight(rgb),
+            "automatically_configures_output_dimensions": videoOutput.automaticallyConfiguresOutputBufferDimensions,
+            "preview_sized_output_buffers": videoOutput.deliversPreviewSizedOutputBuffers,
+            "focus": ["state": focusState, "profile_id": focusProfileID,
+                      "mode_raw": device.focusMode.rawValue, "is_adjusting": adjusting,
+                      "requested_position": requestedPosition.map { $0 as Any } ?? NSNull(),
+                      "lens_position": position, "lock_confirmed": focusState == "locked",
+                      "supports_locked": device.isFocusModeSupported(.locked),
+                      "supports_auto": device.isFocusModeSupported(.autoFocus),
+                      "supports_continuous_auto": device.isFocusModeSupported(.continuousAutoFocus),
+                      "supports_custom_position": device.isLockingFocusWithCustomLensPositionSupported,
+                      "observation": "device state at synchronized callback; not exposure metadata",
+                      "confirmation_method": "completion_and_stable_state_then_synchronization_clock",
+                      "sample_clock_boundary": lockBoundary.map { self.stamp($0) } as Any? ?? NSNull()] as [String: Any],
             "depth_connection": connectionInfo(depthOutput.connection(with: .depthData)),
             "rgb_connection": connectionInfo(videoOutput.connection(with: .video))]
         if let format = device.activeDepthDataFormat {
@@ -168,7 +408,10 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
         latest = Pair(depth: d.depthData, rgb: rgb, depthTime: d.timestamp, rgbTime: rgbTime,
                       arrival: Date(), id: sequence, settings: settings, rejected: rejectedPairs)
         latestLock.unlock()
-        if first { report("RGB-D sincronizado activo. Esperando solicitud de Windows.") }
+        if first {
+            let depthBuffer = d.depthData.depthDataMap
+            report("RGB 1440 × 1080 · depth \(CVPixelBufferGetWidth(depthBuffer)) × \(CVPixelBufferGetHeight(depthBuffer)). Sincronizados; listo para Windows.")
+        }
     }
     private func packet(includeRGB: Bool) throws -> Data {
         latestLock.lock()

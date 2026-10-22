@@ -11,6 +11,7 @@ final class ProbeTransport {
     private let sessionID = UUID().uuidString
     let logURL: URL
     private var listener: NWListener?
+    private var control: ((String) -> [String: Any])?
     private var clients: [UUID: Client] = [:]
 
     private final class Client {
@@ -68,7 +69,8 @@ final class ProbeTransport {
         networkQueue.asyncAfter(deadline: .now() + 15, execute: timer)
     }
 
-    func start(token: String, packet: @escaping (Bool) throws -> Data, report: @escaping (String) -> Void) throws {
+    func start(token: String, control: @escaping (String) -> [String: Any], packet: @escaping (Bool) throws -> Data, report: @escaping (String) -> Void) throws {
+        self.control = control
         let tcp = NWProtocolTCP.Options()
         tcp.noDelay = true
         let server = try NWListener(using: NWParameters(tls: nil, tcp: tcp), on: 8765)
@@ -111,6 +113,26 @@ final class ProbeTransport {
             let line = String(data: request, encoding: .utf8) ?? ""
             let legacy = line == "TD1 \(token)\n"
             let parts = line.dropLast().split(separator: " ", omittingEmptySubsequences: false)
+            // Dedicated authenticated, one-request control connection. Never log token.
+            if parts.first == "TDF" {
+                guard line.last == "\n", parts.count == 3, parts[1] == token,
+                      !parts[2].contains("\n"), let control = self.control else {
+                    self.close(client, "invalid_control"); return
+                }
+                self.preparationQueue.async {
+                    let result = control(String(parts[2]))
+                    var data = (try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])) ?? Data("{}".utf8)
+                    data.append(10)
+                    self.networkQueue.async {
+                        guard self.clients[client.id] != nil else { return }
+                        self.log("focus_control", client, ["command": String(parts[2])])
+                        client.connection.send(content: data, completion: .contentProcessed { _ in
+                            self.close(client, "control_complete")
+                        })
+                    }
+                }
+                return
+            }
             if !legacy {
                 guard line.last == "\n", parts.count == 3, (parts[0] == "TD2" || parts[0] == "TD3"), parts[1] == token,
                       let id = UInt64(parts[2]), id > client.requestID else {
