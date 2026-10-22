@@ -5,7 +5,7 @@ permissions:
   contents: read
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -13,21 +13,11 @@ jobs:
         run: brew install xcodegen
       - name: Generate and build
         run: |
-          ls -d /Applications/Xcode*.app
-          XCODE_PATH=$(python3 -c 'import glob,re; paths=glob.glob("/Applications/Xcode_26*.app"); print(sorted(paths, key=lambda p: tuple(map(int,re.search(r"Xcode_([0-9.]+)",p).group(1).strip(".").split("."))))[0])')
-          sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
           xcodebuild -version
           xcodegen --version
           cd apps/ios
           xcodegen generate
-          # A fresh runner can lose XCBBuildService on its first invocation.
-          for attempt in 1 2 3; do
-            if xcodebuild -project TrueDepthProbe.xcodeproj -scheme TrueDepthProbe -configuration Release -sdk iphoneos -derivedDataPath ../../build -jobs 1 CODE_SIGNING_ALLOWED=NO SWIFT_ENABLE_EXPLICIT_MODULES=NO SWIFT_USE_INTEGRATED_DRIVER=NO build; then
-              exit 0
-            fi
-            sleep 3
-          done
-          exit 1
+          xcodebuild -project TrueDepthProbe.xcodeproj -scheme TrueDepthProbe -configuration Release -sdk iphoneos -derivedDataPath ../../build CODE_SIGNING_ALLOWED=NO build
       - name: Package unsigned IPA
         run: |
           mkdir -p dist/Payload
