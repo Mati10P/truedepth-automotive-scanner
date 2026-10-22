@@ -22,7 +22,7 @@ jobs:
           xcodegen generate
           # A fresh runner can lose XCBBuildService on its first invocation.
           for attempt in 1 2 3; do
-            if xcodebuild -project TrueDepthProbe.xcodeproj -scheme TrueDepthProbe -configuration Release -sdk iphoneos -derivedDataPath ../../build -jobs 1 CODE_SIGNING_ALLOWED=NO build; then
+            if xcodebuild -project TrueDepthProbe.xcodeproj -scheme TrueDepthProbe -configuration Release -sdk iphoneos -derivedDataPath ../../build -jobs 1 CODE_SIGNING_ALLOWED=NO SWIFT_ENABLE_EXPLICIT_MODULES=NO SWIFT_USE_INTEGRATED_DRIVER=NO build; then
               exit 0
             fi
             sleep 3
