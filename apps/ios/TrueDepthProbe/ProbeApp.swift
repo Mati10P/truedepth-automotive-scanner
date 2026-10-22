@@ -160,6 +160,7 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
                 self.focusProfileID = UUID().uuidString
                 self.requestedPosition = position
                 if let position = position { UserDefaults.standard.set(position, forKey: "manualLensPosition") }
+                else { UserDefaults.standard.removeObject(forKey: "manualLensPosition") }
                 self.focusState = "locking"; self.lockBoundary = nil
                 self.focusCompletionReceived = false
                 self.clearPair()
@@ -206,7 +207,8 @@ final class Probe: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDe
             guard let device = captureDevice else { return ["ok": false, "error": "Camera inactive"] }
             return ["ok": true, "state": focusState, "profile_id": focusProfileID,
                     "lens_position": device.lensPosition, "is_adjusting": device.isAdjustingFocus,
-                    "lock_confirmed": focusState == "locked" && device.focusMode == .locked && !device.isAdjustingFocus,
+                    "lock_confirmed": focusState == "locked" && device.focusMode == .locked && !device.isAdjustingFocus
+                        && lockedPosition.map { abs(device.lensPosition - $0) < 0.0001 } == true,
                     "requested_position": requestedPosition.map { $0 as Any } ?? NSNull()]
         }
     }
